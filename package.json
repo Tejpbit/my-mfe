@@ -1,0 +1,10 @@
+{
+  "name": "mfe",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node tests/engine.test.mjs",
+    "icons": "node scripts/gen-icons.mjs",
+    "serve": "python3 -m http.server 8123"
+  }
+}
