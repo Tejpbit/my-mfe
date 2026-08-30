@@ -353,12 +353,13 @@ export function coachEvaluate(s, move, p) {
   if (move.type === 'bomb') {
     let expected = 0;
     for (const i of bombCells(move.index)) if (!s.revealed[i]) expected += prob[i];
-    const window = bestBombWindow(s, prob);
+    const bw = bestBombWindow(s, prob);
     out.kind = 'bomb';
     out.bombExpected = expected;
-    out.bombBest = window;
-    out.verdict = bombAdvice ? (expected >= window.expected - 0.75 ? 'best' : 'inaccuracy')
-      : (expected >= window.expected - 0.5 && expected >= 4 ? 'good' : 'mistake');
+    out.bombBest = bw;
+    out.verdict = bombAdvice ? (expected >= bw.expected - 0.75 ? 'best' : 'inaccuracy')
+      : (expected >= bw.expected - 0.5 && expected >= 4 ? 'good' : 'mistake');
+    out.quality = Math.max(0, Math.min(1, (expected / Math.max(0.001, bw.expected)) * (bombAdvice ? 1 : 0.6)));
     return out;
   }
   out.kind = 'reveal';
@@ -372,6 +373,12 @@ export function coachEvaluate(s, move, p) {
     const delta = best - scores[move.index];
     out.verdict = delta <= 0.25 ? 'best' : delta <= 0.8 ? 'good' : delta <= 1.8 ? 'inaccuracy' : 'mistake';
   }
+  // Continuous move quality, outcome-independent: how close was the choice to
+  // the best available? The expert score already prices in mine probability
+  // and the cost of diving, so a lucky dive still loses points here.
+  const delta = best - scores[move.index];
+  out.quality = Math.max(0, Math.min(1, 1 - delta / 5));
+  if (out.verdict === 'missed-bomb') out.quality = Math.min(out.quality, 0.4);
   return out;
 }
 

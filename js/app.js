@@ -48,9 +48,9 @@ function show(name) {
 
 /* ---------- AI game persistence ---------- */
 function saveAiGame() {
-  if (mode !== 'ai' || !state) return;
+  if ((mode !== 'ai' && mode !== 'hot') || !state) return;
   if (state.status === 'over') { localStorage.removeItem('mfe-ai-save'); return; }
-  localStorage.setItem('mfe-ai-save', JSON.stringify({ state, aiLevel, coach, date: Date.now() }));
+  localStorage.setItem('mfe-ai-save', JSON.stringify({ state, aiLevel, coach, gmode: mode, date: Date.now() }));
 }
 
 function updateContinue() {
@@ -58,8 +58,9 @@ function updateContinue() {
   try {
     const raw = localStorage.getItem('mfe-ai-save');
     if (!raw) { btn.hidden = true; return; }
-    const { state: st, aiLevel: lvl, coach: co } = JSON.parse(raw);
-    btn.textContent = `Continue ${co ? 'training' : `vs ${lvl === 'expert' ? 'AI Expert' : 'AI'}`} · ${st.scores[0]}–${st.scores[1]}`;
+    const { state: st, aiLevel: lvl, coach: co, gmode } = JSON.parse(raw);
+    const what = gmode === 'hot' ? 'local game' : co ? 'training' : `vs ${lvl === 'expert' ? 'AI Expert' : 'AI'}`;
+    btn.textContent = `Continue ${what} · ${st.scores[0]}–${st.scores[1]}`;
     btn.hidden = false;
   } catch {
     btn.hidden = true;
@@ -68,8 +69,10 @@ function updateContinue() {
 
 function resumeAiGame() {
   try {
-    const { state: st, aiLevel: lvl, coach: co } = JSON.parse(localStorage.getItem('mfe-ai-save'));
-    mode = 'ai'; myPlayer = 0; aiLevel = lvl === 'expert' ? 'expert' : 'casual'; coach = !!co;
+    const { state: st, aiLevel: lvl, coach: co, gmode } = JSON.parse(localStorage.getItem('mfe-ai-save'));
+    mode = gmode === 'hot' ? 'hot' : 'ai';
+    myPlayer = 0; aiLevel = lvl === 'expert' ? 'expert' : 'casual';
+    coach = mode === 'hot' ? false : !!co;
     state = st;
     resetFlags();
     show('game');
@@ -200,6 +203,9 @@ function render() {
   } else if (mode === 'hot') {
     banner.textContent = `${s.players[s.turn]?.name || (s.turn === 0 ? 'Red' : 'Blue')}'s turn`;
     banner.classList.add('me');
+  } else if (myPlayer < 0) {
+    banner.textContent = `Observing · ${s.players[s.turn]?.name || (s.turn === 0 ? 'Red' : 'Blue')}'s turn`;
+    banner.classList.remove('me');
   } else {
     const mine = s.turn === myPlayer;
     banner.textContent = mine ? 'Your turn' : `${s.players[1 - myPlayer]?.name || 'Opponent'} is thinking…`;
@@ -262,7 +268,7 @@ function playFx(last, mover) {
   else if (last.type === 'mine') sfx.mine(meMoved);
   else sfx.safe(last.cells.length);
   if (state.status === 'over') {
-    const iWon = mode === 'hot' || state.winner === myPlayer;
+    const iWon = mode === 'hot' || myPlayer < 0 || state.winner === myPlayer;
     setTimeout(() => (iWon ? sfx.win() : sfx.lose()), 350);
     if (!iWon) $('screen-game').classList.add('shake');
   }
@@ -412,8 +418,49 @@ function enterReview(data) {
   myPlayer = data.myPlayer ?? 0;
   resetFlags();
   $('btn-hint').hidden = true;
+  buildTimeline();
+  buildReviewChart();
+  try { history.replaceState(null, '', `${location.pathname}?g=${encodeGame(review.mines, review.moves, review.players)}`); } catch { }
   show('game');
   stepTo(review.step);
+}
+
+// Evaluate every move once up front: powers the chart and makes stepping free.
+function buildTimeline() {
+  const s = gameFromMines(review.mines);
+  s.players = review.players;
+  review.timeline = [];
+  review.moves.forEach((mv, j) => {
+    const move = { type: mv.t === 'b' ? 'bomb' : 'reveal', index: mv.i };
+    review.evals[j] = coachEvaluate(s, move, mv.p);
+    if (mv.t === 'b') bomb(s, mv.i, mv.p); else reveal(s, mv.i, mv.p);
+    review.timeline.push({ p: mv.p, verdict: review.evals[j].verdict, diff: s.scores[0] - s.scores[1] });
+  });
+}
+
+function buildReviewChart() {
+  const N = review.timeline.length;
+  if (!N) { $('rv-chart').innerHTML = ''; return; }
+  const MID = 12;
+  const maxAbs = Math.max(1, ...review.timeline.map(t => Math.abs(t.diff)));
+  const pts = review.timeline.map((t, j) => `${j + 1},${(MID - (t.diff / maxAbs) * (MID - 1.5)).toFixed(2)}`).join(' ');
+  const tickColor = v => V_COLORS[v === 'best' ? 'best' : v === 'good' ? 'good' : v === 'inaccuracy' ? 'inaccuracy' : 'bad'];
+  const ticks = review.timeline.map((t, j) =>
+    `<rect x="${j + 0.15}" y="${t.p === 0 ? 29 : 43}" width="0.7" height="10" fill="${tickColor(t.verdict)}"/>`).join('');
+  $('rv-chart').innerHTML = `
+    <svg viewBox="0 0 ${N + 1} 56" preserveAspectRatio="none">
+      <rect x="0" y="29" width="0.35" height="10" fill="var(--red)"/>
+      <rect x="0" y="43" width="0.35" height="10" fill="var(--blue)"/>
+      <line x1="0" y1="${MID}" x2="${N + 1}" y2="${MID}" stroke="rgba(139,152,169,0.4)" stroke-width="1" stroke-dasharray="4 4" vector-effect="non-scaling-stroke"/>
+      <polyline points="0.5,${MID} ${pts}" fill="none" stroke="#aeb9c7" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>
+      ${ticks}
+      <line id="rv-cursor" x1="0" y1="0" x2="0" y2="56" stroke="var(--gold)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+    </svg>`;
+  $('rv-chart').onclick = e => {
+    const r = $('rv-chart').getBoundingClientRect();
+    sfx.tap();
+    stepTo(Math.round(((e.clientX - r.left) / r.width) * (N + 1)));
+  };
 }
 
 function replayTo(k) {
@@ -437,6 +484,11 @@ function stepTo(k) {
   oddsCache = { seq: -1, prob: null };
   clearMarks();
   $('review-label').textContent = `${k}/${review.moves.length}`;
+  const slider = $('rv-slider');
+  slider.max = review.moves.length;
+  if (+slider.value !== k) slider.value = k;
+  const cursor = document.getElementById('rv-cursor');
+  if (cursor) { cursor.setAttribute('x1', k); cursor.setAttribute('x2', k); }
   if (k === 0) {
     coachPanel('Review.', ['Step through the game with the arrows. Tap any cell to ask why, or toggle Odds.'], 'good');
   } else {
@@ -451,8 +503,83 @@ function stepTo(k) {
   render();
 }
 
+/* ---------- game sharing ---------- */
+// Compact binary: version, two length-prefixed UTF-8 names, 32-byte mine
+// bitmap, 2-byte move count, one byte (cell index) per move, then the
+// ordinals of bomb moves. Players are derivable by replaying (mover = turn).
+function encodeGame(mines, moves, players) {
+  const enc = new TextEncoder();
+  const na = enc.encode((players[0]?.name || 'Red').slice(0, 16));
+  const nb = enc.encode((players[1]?.name || 'Blue').slice(0, 16));
+  const bombs = moves.map((m, j) => (m.t === 'b' ? j : -1)).filter(j => j >= 0);
+  const bytes = [1, na.length, ...na, nb.length, ...nb];
+  for (let byte = 0; byte < 32; byte++) {
+    let v = 0;
+    for (let bit = 0; bit < 8; bit++) if (mines[byte * 8 + bit]) v |= 1 << bit;
+    bytes.push(v);
+  }
+  bytes.push(moves.length >> 8, moves.length & 0xff);
+  for (const m of moves) bytes.push(m.i);
+  bytes.push(bombs.length);
+  for (const j of bombs) bytes.push(j >> 8, j & 0xff);
+  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function decodeGame(b64) {
+  const bin = atob(b64.replace(/-/g, '+').replace(/_/g, '/'));
+  const bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
+  let o = 0;
+  if (bytes[o++] !== 1) throw new Error('version');
+  const dec = new TextDecoder();
+  const la = bytes[o++]; const nameA = dec.decode(bytes.slice(o, o + la)); o += la;
+  const lb = bytes[o++]; const nameB = dec.decode(bytes.slice(o, o + lb)); o += lb;
+  const mines = new Array(SIZE).fill(false);
+  for (let byte = 0; byte < 32; byte++, o++) {
+    for (let bit = 0; bit < 8; bit++) if (bytes[o] & (1 << bit)) mines[byte * 8 + bit] = true;
+  }
+  const n = (bytes[o] << 8) | bytes[o + 1]; o += 2;
+  const idx = [...bytes.slice(o, o + n)]; o += n;
+  const bombSet = new Set();
+  const bc = bytes[o++];
+  for (let k = 0; k < bc; k++, o += 2) bombSet.add((bytes[o] << 8) | bytes[o + 1]);
+  const s = gameFromMines(mines);
+  const moves = [];
+  idx.forEach((i, j) => {
+    const t = bombSet.has(j) ? 'b' : 'r';
+    const p = s.turn;
+    const res = t === 'b' ? bomb(s, i, p) : reveal(s, i, p);
+    if (!res) throw new Error('bad move ' + j);
+    moves.push({ t, i, p });
+  });
+  return { mines, moves, players: [{ name: nameA }, { name: nameB }], myPlayer: 0, gmode: 'shared' };
+}
+
+function shareText() {
+  const { s } = replayTo(review.moves.length);
+  const url = `${location.origin}${location.pathname}?g=${encodeGame(review.mines, review.moves, review.players)}`;
+  const nameA = s.players[0]?.name || 'Red', nameB = s.players[1]?.name || 'Blue';
+  const winner = s.winner != null ? ` · ${s.players[s.winner]?.name || (s.winner === 0 ? 'Red' : 'Blue')} wins 🏆` : '';
+  const per = computeStats(review.mines, review.moves, review.players);
+  const line = (st, name) =>
+    `${name}: 🎯 ${Math.round(performanceScore(st) * 100)}% · 🧠 ${st.read} well-read · 🍀 ${st.lucky} lucky · 🌊 ${st.dives} dive${st.dives === 1 ? '' : 's'} · 🙈 ${st['missed-certain'] + st['missed-bomb']} missed`;
+  return `Minesweeper Flags Extreme\n${nameA} ${s.scores[0]} – ${s.scores[1]} ${nameB}${winner}\n${line(per[0], nameA)}\n${line(per[1], nameB)}\n\nWatch the replay: ${url}`;
+}
+
+async function copyReviewGame() {
+  const text = shareText();
+  const url = text.slice(text.indexOf('http'));
+  try {
+    await navigator.clipboard.writeText(text);
+    const btn = $('rv-copy');
+    btn.textContent = '✅';
+    setTimeout(() => { btn.textContent = '📋'; }, 1500);
+  } catch {
+    coachPanel('Copy failed.', [`Your browser blocked the clipboard — here is the link: ${url}`], 'inaccuracy');
+  }
+}
+
 function emptyStats() {
-  return { n: 0, best: 0, good: 0, inaccuracy: 0, mistake: 0, 'missed-certain': 0, 'missed-bomb': 0, dives: 0, divesOpened: 0, lucky: 0, read: 0 };
+  return { n: 0, qSum: 0, best: 0, good: 0, inaccuracy: 0, mistake: 0, 'missed-certain': 0, 'missed-bomb': 0, dives: 0, divesOpened: 0, lucky: 0, read: 0 };
 }
 
 function computeStats(mines, moves, players) {
@@ -464,6 +591,7 @@ function computeStats(mines, moves, players) {
     const ev = coachEvaluate(s, move, mv.p);
     const st = per[mv.p];
     st.n++;
+    st.qSum += ev.quality ?? 0;
     st[ev.verdict] = (st[ev.verdict] || 0) + 1;
     const res = mv.t === 'b' ? bomb(s, mv.i, mv.p) : reveal(s, mv.i, mv.p);
     if (ev.kind === 'reveal') {
@@ -480,9 +608,8 @@ function computeStats(mines, moves, players) {
 
 const V_COLORS = { best: '#6fd18a', good: '#4da3ff', inaccuracy: '#ffb02e', bad: '#ff5470' };
 
-function accuracy(st) {
-  if (!st.n) return 0;
-  return (st.best + 0.7 * st.good + 0.3 * st.inaccuracy) / st.n;
+function performanceScore(st) {
+  return st.n ? st.qSum / st.n : 0;
 }
 
 function statsBoxHtml(per, s, meSeat) {
@@ -518,9 +645,9 @@ function statsBoxHtml(per, s, meSeat) {
 
   return `
     <div class="acc-row">
-      <div class="acc"><span class="acc-num" style="color:${seatColor(meSeat)}">${Math.round(accuracy(a) * 100)}%</span><span class="acc-name">${leftName}</span></div>
-      <span class="acc-label">accuracy</span>
-      <div class="acc right"><span class="acc-num" style="color:${seatColor(opp)}">${Math.round(accuracy(b) * 100)}%</span><span class="acc-name">${name(opp)}</span></div>
+      <div class="acc"><span class="acc-num" style="color:${seatColor(meSeat)}">${Math.round(performanceScore(a) * 100)}%</span><span class="acc-name">${leftName}</span></div>
+      <span class="acc-label">performance</span>
+      <div class="acc right"><span class="acc-num" style="color:${seatColor(opp)}">${Math.round(performanceScore(b) * 100)}%</span><span class="acc-name">${name(opp)}</span></div>
     </div>
     <div class="vbar-line"><span class="vbar-name">${leftName}</span>${vbar(a)}</div>
     <div class="vbar-line"><span class="vbar-name">${name(opp)}</span>${vbar(b)}</div>
@@ -560,9 +687,14 @@ function showGameOver() {
   const s = state;
   const over = $('gameover');
   if (!over.hidden) return;
-  const iWon = mode === 'hot' || s.winner === myPlayer;
+  const neutral = mode === 'hot' || myPlayer < 0;
+  const iWon = neutral || s.winner === myPlayer;
   const winName = s.players[s.winner]?.name || (s.winner === 0 ? 'Red' : 'Blue');
-  $('gameover-title').textContent = mode === 'hot' ? `${winName} wins!` : iWon ? 'Victory!' : 'Defeat';
+  $('gameover-title').textContent = neutral ? `${winName} wins!` : iWon ? 'Victory!' : 'Defeat';
+  $('btn-rematch').hidden = myPlayer < 0;
+  if (s.moves?.length) {
+    try { history.replaceState(null, '', `${location.pathname}?g=${encodeGame(s.mines, s.moves, s.players)}`); } catch { }
+  }
   $('gameover-sub').textContent = `${s.players[0]?.name || 'Red'} ${s.scores[0]} — ${s.scores[1]} ${s.players[1]?.name || 'Blue'}`;
   const statsEl = $('gameover-stats');
   try {
@@ -579,7 +711,7 @@ function reviewCurrentGame() {
   if (!state || !state.moves?.length) return;
   enterReview({
     mines: state.mines, moves: state.moves, players: state.players,
-    myPlayer: mode === 'hot' ? 0 : myPlayer, gmode: mode,
+    myPlayer: mode === 'hot' ? 0 : Math.max(0, myPlayer), gmode: mode,
   });
 }
 
@@ -593,8 +725,8 @@ function maybeSaveResult() {
     names: [state.players[0]?.name || 'Red', state.players[1]?.name || 'Blue'],
     scores: state.scores,
     winner: state.winner,
-    won: mode === 'hot' ? null : state.winner === myPlayer,
-    replay: { mines: state.mines, moves: state.moves, myPlayer },
+    won: mode === 'hot' || myPlayer < 0 ? null : state.winner === myPlayer,
+    replay: { mines: state.mines, moves: state.moves, myPlayer: Math.max(0, myPlayer) },
   });
   // full replays are kept for the 20 most recent games
   for (let i = 20; i < list.length; i++) delete list[i].replay;
@@ -671,6 +803,7 @@ function startHotseat() {
   resetFlags();
   show('game');
   render();
+  saveAiGame();
 }
 
 async function startOnline(role) {
@@ -696,6 +829,7 @@ async function startOnline(role) {
       if (st === 'connected' && !opened) {
         opened = true;
         statusEl.hidden = true;
+        localStorage.setItem('mfe-pass', pass);
         enterOnlineGame(role);
       } else if (st === 'error' && !opened) {
         statusEl.classList.add('err');
@@ -720,6 +854,10 @@ function enterOnlineGame(role) {
     state = newGame();
     state.players = [{ name: settings.name, id: settings.id }, null];
     net.publish({ t: 'state', state });
+  } else if (role === 'observe') {
+    myPlayer = -1;
+    state = null;
+    $('btn-bomb').hidden = true;
   } else {
     myPlayer = 1;
     state = null;
@@ -745,8 +883,9 @@ function onNetMessage(msg) {
       net.publish({ t: 'state', state });
       return;
     } else if (incoming.players[1].id !== settings.id) {
-      $('turn-banner').textContent = 'Room is full (two players already joined).';
-      return;
+      // Both seats taken by others: watch instead of playing.
+      myPlayer = -1;
+      $('btn-bomb').hidden = true;
     }
   }
 
@@ -784,6 +923,7 @@ function quit() {
   state = null;
   review = null;
   mode = null;
+  history.replaceState(null, '', location.pathname);
   show('home');
 }
 
@@ -802,6 +942,7 @@ $('btn-odds').onclick = () => {
 $('btn-hotseat').onclick = () => { sfx.tap(); startHotseat(); };
 $('btn-create').onclick = () => { sfx.tap(); startOnline('create'); };
 $('btn-join').onclick = () => { sfx.tap(); startOnline('join'); };
+$('btn-observe').onclick = () => { sfx.tap(); startOnline('observe'); };
 let settingsReturn = 'home';
 $('btn-tutorial').onclick = () => show('tutorial');
 $('btn-history').onclick = () => show('history');
@@ -821,6 +962,8 @@ $('rv-first').onclick = () => { sfx.tap(); stepTo(0); };
 $('rv-prev').onclick = () => { sfx.tap(); stepTo(review.step - 1); };
 $('rv-next').onclick = () => { sfx.tap(); stepTo(review.step + 1); };
 $('rv-last').onclick = () => { sfx.tap(); stepTo(review.moves.length); };
+$('rv-slider').oninput = e => stepTo(+e.target.value);
+$('rv-copy').onclick = () => { sfx.tap(); copyReviewGame(); };
 $('btn-rematch').onclick = () => { sfx.tap(); rematch(); };
 $('btn-bomb').onclick = () => {
   armed = !armed;
@@ -847,6 +990,8 @@ $('btn-why').onclick = () => {
 };
 $('btn-bomb-cancel').onclick = () => { armed = false; aiming = -1; render(); };
 
+$('inp-pass').value = localStorage.getItem('mfe-pass') || '';
+
 $('set-name').value = settings.name;
 $('set-name').onchange = e => { settings.name = e.target.value.trim() || 'Player'; };
 $('set-sound').checked = settings.sound;
@@ -860,7 +1005,18 @@ $('btn-mqtt-default').onclick = () => { settings.mqtt = DEFAULT_MQTT; $('set-mqt
 
 $('btn-tut-play').onclick = () => show('home');
 
-window.mfe = { get state() { return state; } };
+window.mfe = { get state() { return state; }, get mode() { return mode; }, get myPlayer() { return myPlayer; }, encodeGame, decodeGame, shareText };
+
+const sharedGame = new URLSearchParams(location.search).get('g');
+if (sharedGame) {
+  try {
+    const data = decodeGame(sharedGame);
+    history.replaceState(null, '', location.pathname);
+    enterReview(data);
+  } catch {
+    history.replaceState(null, '', location.pathname);
+  }
+}
 
 if (!localStorage.getItem('mfe-tut-seen')) {
   localStorage.setItem('mfe-tut-seen', '1');

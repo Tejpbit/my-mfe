@@ -84,6 +84,7 @@
         <button class="btn btn-red" id="btn-create">Create game</button>
         <button class="btn btn-blue" id="btn-join">Join game</button>
       </div>
+      <div class="observe-row"><button class="link" id="btn-observe">Observe a game</button></div>
       <div id="online-status" class="online-status" hidden></div>
     </div>
 
@@ -121,11 +122,19 @@
     </div>
 
     <div id="review-nav" class="review-nav" hidden>
-      <button class="btn nav-s" id="rv-first">&#9198;</button>
-      <button class="btn nav-s" id="rv-prev">&#9664;</button>
-      <span id="review-label" class="review-label">0/0</span>
-      <button class="btn nav-s" id="rv-next">&#9654;</button>
-      <button class="btn nav-s" id="rv-last">&#9197;</button>
+      <div id="rv-chart" class="rv-chart"></div>
+      <div class="rv-legend">line = mine lead (Red up, Blue down) &middot; ticks = move quality
+        <span class="rv-key"><i style="background:#6fd18a"></i>best <i style="background:#4da3ff"></i>good <i style="background:#ffb02e"></i>shaky <i style="background:#ff5470"></i>poor</span>
+        &middot; tap to jump</div>
+      <input type="range" id="rv-slider" class="rv-slider" min="0" max="0" value="0" step="1">
+      <div class="review-buttons">
+        <button class="btn nav-s" id="rv-first">&#9198;</button>
+        <button class="btn nav-s" id="rv-prev">&#9664;</button>
+        <span id="review-label" class="review-label">0/0</span>
+        <button class="btn nav-s" id="rv-next">&#9654;</button>
+        <button class="btn nav-s" id="rv-last">&#9197;</button>
+        <button class="btn nav-s" id="rv-copy" title="Copy game &amp; share link">&#128203;</button>
+      </div>
     </div>
 
     <div id="coach" class="coach" hidden></div>

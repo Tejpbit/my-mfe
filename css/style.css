@@ -302,7 +302,20 @@ input[type="text"]:focus, select:focus { border-color: var(--blue); }
 .cell.coach-why { outline: 2px dashed var(--blue); outline-offset: -2px; }
 .cell.coach-pick { outline: 2px solid var(--gold); outline-offset: -2px; }
 .cell.coach-group { outline: 1px dashed rgba(139, 152, 169, 0.8); outline-offset: -3px; }
-.review-nav { display: flex; align-items: center; gap: 6px; }
+.review-nav { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
+.review-buttons { display: flex; align-items: center; justify-content: center; gap: 6px; }
+.observe-row { text-align: center; margin-top: 8px; }
+.rv-legend { font-size: 10.5px; color: var(--muted); text-align: center; line-height: 1.5; }
+.rv-key i { display: inline-block; width: 7px; height: 7px; border-radius: 2px; margin: 0 3px 0 6px; }
+.rv-chart { height: 64px; cursor: pointer; }
+.rv-chart svg { width: 100%; height: 100%; display: block; }
+.rv-slider {
+  width: 100%;
+  accent-color: var(--gold);
+  height: 22px;
+  margin: 0;
+  cursor: pointer;
+}
 .nav-s { padding: 8px 14px; font-size: 14px; }
 .review-label { min-width: 64px; text-align: center; font-variant-numeric: tabular-nums; font-weight: 700; color: var(--muted); }
 
@@ -391,6 +404,35 @@ input[type="text"]:focus, select:focus { border-color: var(--blue); }
   .footer-row { justify-content: center; }
   .board { width: min(100%, calc(100dvh - 200px), 640px); }
   #screen-game.coach-on .board { width: min(100%, calc(100dvh - 200px), 640px); }
+}
+
+/* ---------- phone landscape: board left at full height, controls right ---------- */
+@media (orientation: landscape) and (max-height: 620px) and (max-width: 899px) {
+  #screen-game {
+    padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: auto auto auto auto auto 1fr;
+    grid-template-areas:
+      "gboard gheader"
+      "gboard gscore"
+      "gboard gbanner"
+      "gboard gnav"
+      "gboard gcoach"
+      "gboard gfooter";
+    column-gap: 12px;
+    align-content: start;
+  }
+  .game-header { grid-area: gheader; }
+  .scorebar { grid-area: gscore; }
+  .turn-banner { grid-area: gbanner; min-height: 0; }
+  .board-wrap { grid-area: gboard; }
+  #review-nav { grid-area: gnav; }
+  #coach { grid-area: gcoach; min-height: 0; max-height: 120px; }
+  .game-footer { grid-area: gfooter; margin-top: 0; min-height: 0; justify-content: flex-end; }
+  .board { width: calc(100dvh - 20px - env(safe-area-inset-bottom)); }
+  #screen-game.coach-on .board { width: calc(100dvh - 20px - env(safe-area-inset-bottom)); }
+  .rv-chart { height: 44px; }
 }
 
 .shake { animation: shake 0.4s ease; }
