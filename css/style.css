@@ -308,16 +308,31 @@ input[type="text"]:focus, select:focus { border-color: var(--blue); }
 
 .gostats {
   text-align: left;
-  font-size: 12.5px;
-  line-height: 1.6;
+  font-size: 12px;
   color: var(--muted);
   background: var(--bg2);
   border-radius: 8px;
-  padding: 10px 12px;
+  padding: 12px;
   margin: 4px 0 10px;
 }
-.gostats b { color: var(--text); }
-.gostats .who { color: var(--text); font-weight: 700; }
+.acc-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.acc-num { font-size: 24px; font-weight: 800; line-height: 1.1; }
+.acc-name { display: block; font-size: 11px; color: var(--muted); }
+.acc.right { text-align: right; }
+.acc-label { font-size: 11px; color: var(--muted); letter-spacing: 0.5px; text-transform: uppercase; }
+.vbar-line { display: grid; grid-template-columns: 64px 1fr; align-items: center; gap: 8px; margin: 4px 0; }
+.vbar-name { font-size: 11px; color: var(--muted); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vbar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--bg); gap: 1px; }
+.vseg { min-width: 2px; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 10.5px; margin: 8px 0 12px; }
+.legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; }
+.cmp { display: grid; grid-template-columns: 20px 1fr 104px 1fr 20px; align-items: center; gap: 6px; margin: 5px 0; }
+.cmp-label { text-align: center; color: var(--muted); font-size: 11px; }
+.cmp-v { font-weight: 700; color: var(--text); text-align: center; font-variant-numeric: tabular-nums; }
+.cmp-bar { height: 8px; background: var(--bg); border-radius: 4px; overflow: hidden; position: relative; }
+.cmp-bar i { position: absolute; top: 0; bottom: 0; display: block; border-radius: 4px; }
+.cmp-bar.l i { right: 0; }
+.cmp-bar.r i { left: 0; }
 
 .history-item .review-link { margin-left: 10px; }
 
@@ -343,7 +358,7 @@ input[type="text"]:focus, select:focus { border-color: var(--blue); }
   backdrop-filter: blur(4px); z-index: 10; padding: 20px;
   animation: fadein 0.3s ease;
 }
-.gameover-card { text-align: center; width: min(100%, 340px); }
+.gameover-card { text-align: center; width: min(100%, 420px); }
 .gameover-card h2 { font-size: 26px; margin-bottom: 2px; }
 .gameover-card p { color: var(--muted); margin: 0 0 8px; }
 

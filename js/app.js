@@ -478,12 +478,59 @@ function computeStats(mines, moves, players) {
   return per;
 }
 
-function statsHtml(st, label) {
-  const missed = [];
-  if (st['missed-certain']) missed.push(`<b>${st['missed-certain']}</b> sure mine${st['missed-certain'] > 1 ? 's' : ''}`);
-  if (st['missed-bomb']) missed.push(`<b>${st['missed-bomb']}</b> bomb moment${st['missed-bomb'] > 1 ? 's' : ''}`);
-  return `<div><span class="who">${esc(label)}</span> — <b>${st.best}</b> best · <b>${st.good}</b> good · <b>${st.inaccuracy}</b> inaccurate · <b>${st.mistake}</b> mistakes<br>` +
-    `Missed: ${missed.length ? missed.join(', ') : 'nothing!'} · Risky dives: <b>${st.dives}</b>${st.dives ? ` (${st.divesOpened} opened fields)` : ''} · Lucky hits: <b>${st.lucky}</b> · Well-read hits: <b>${st.read}</b></div>`;
+const V_COLORS = { best: '#6fd18a', good: '#4da3ff', inaccuracy: '#ffb02e', bad: '#ff5470' };
+
+function accuracy(st) {
+  if (!st.n) return 0;
+  return (st.best + 0.7 * st.good + 0.3 * st.inaccuracy) / st.n;
+}
+
+function statsBoxHtml(per, s, meSeat) {
+  const opp = 1 - meSeat;
+  const seatColor = seat => (seat === 0 ? 'var(--red)' : 'var(--blue)');
+  const name = seat => esc(s.players[seat]?.name || (seat === 0 ? 'Red' : 'Blue'));
+  const leftName = mode === 'hot' || mode === 'review' ? name(meSeat) : 'You';
+  const a = per[meSeat], b = per[opp];
+
+  const segs = st => {
+    const bad = st.mistake + st['missed-certain'] + st['missed-bomb'];
+    return [['best', st.best], ['good', st.good], ['inaccuracy', st.inaccuracy], ['bad', bad]];
+  };
+  const vbar = st => `<div class="vbar">${segs(st).filter(([, v]) => v > 0)
+    .map(([k, v]) => `<div class="vseg" style="flex:${v};background:${V_COLORS[k]}"></div>`).join('') || '<div class="vseg" style="flex:1;background:var(--line)"></div>'}</div>`;
+
+  const rows = [
+    ['Missed chances', st => st['missed-certain'] + st['missed-bomb']],
+    ['Risky dives', st => st.dives],
+    ['Lucky hits', st => st.lucky],
+    ['Well-read hits', st => st.read],
+  ];
+  const cmp = rows.map(([label, f]) => {
+    const va = f(a), vb = f(b), max = Math.max(va, vb, 1);
+    return `<div class="cmp">
+      <span class="cmp-v">${va}</span>
+      <div class="cmp-bar l"><i style="width:${(va / max) * 100}%;background:${seatColor(meSeat)}"></i></div>
+      <span class="cmp-label">${label}</span>
+      <div class="cmp-bar r"><i style="width:${(vb / max) * 100}%;background:${seatColor(opp)}"></i></div>
+      <span class="cmp-v">${vb}</span>
+    </div>`;
+  }).join('');
+
+  return `
+    <div class="acc-row">
+      <div class="acc"><span class="acc-num" style="color:${seatColor(meSeat)}">${Math.round(accuracy(a) * 100)}%</span><span class="acc-name">${leftName}</span></div>
+      <span class="acc-label">accuracy</span>
+      <div class="acc right"><span class="acc-num" style="color:${seatColor(opp)}">${Math.round(accuracy(b) * 100)}%</span><span class="acc-name">${name(opp)}</span></div>
+    </div>
+    <div class="vbar-line"><span class="vbar-name">${leftName}</span>${vbar(a)}</div>
+    <div class="vbar-line"><span class="vbar-name">${name(opp)}</span>${vbar(b)}</div>
+    <div class="legend">
+      <span><i style="background:${V_COLORS.best}"></i>best</span>
+      <span><i style="background:${V_COLORS.good}"></i>good</span>
+      <span><i style="background:${V_COLORS.inaccuracy}"></i>inaccurate</span>
+      <span><i style="background:${V_COLORS.bad}"></i>poor/missed</span>
+    </div>
+    ${cmp}`;
 }
 
 /* ---------- AI ---------- */
@@ -520,9 +567,7 @@ function showGameOver() {
   const statsEl = $('gameover-stats');
   try {
     const per = computeStats(s.mines, s.moves, s.players);
-    statsEl.innerHTML = mode === 'hot'
-      ? statsHtml(per[0], s.players[0]?.name || 'Red') + statsHtml(per[1], s.players[1]?.name || 'Blue')
-      : statsHtml(per[myPlayer], 'You');
+    statsEl.innerHTML = statsBoxHtml(per, s, mode === 'hot' ? 0 : myPlayer);
     statsEl.hidden = false;
   } catch {
     statsEl.hidden = true;
