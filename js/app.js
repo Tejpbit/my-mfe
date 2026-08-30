@@ -1,4 +1,4 @@
-import { SIZE, W, H, BOMB_RADIUS, WIN_SCORE, newGame, reveal, bomb, canBomb, bombCells, minesLeft } from './game.js';
+import { SIZE, W, H, BOMB_RADIUS, WIN_SCORE, newGame, gameFromMines, reveal, bomb, canBomb, bombCells, minesLeft } from './game.js';
 import { aiMove, aiMoveExpert, coachEvaluate, exactProbs, explainCell } from './ai.js';
 import { Net } from './net.js';
 import { sfx, setSoundEnabled } from './sound.js';
@@ -164,7 +164,7 @@ function render() {
     }
   }
 
-  if (coach && oddsOn && s.status === 'playing' && s.turn === myPlayer) {
+  if (coach && oddsOn && (mode === 'review' || (s.status === 'playing' && s.turn === myPlayer))) {
     if (oddsCache.seq !== s.seq) oddsCache = { seq: s.seq, prob: exactProbs(s).prob };
     for (let i = 0; i < SIZE; i++) {
       if (!s.revealed[i]) {
@@ -185,7 +185,10 @@ function render() {
   $('scorebar-blue').style.width = `${(s.scores[1] / WIN_SCORE) * 50}%`;
 
   const banner = $('turn-banner');
-  if (s.status === 'over') {
+  if (mode === 'review') {
+    banner.textContent = `Reviewing · move ${review.step} of ${review.moves.length}`;
+    banner.classList.remove('me');
+  } else if (s.status === 'over') {
     banner.textContent = '';
   } else if (mode === 'online' && !s.players[1]) {
     banner.textContent = 'Waiting for opponent to join…';
@@ -214,7 +217,7 @@ function activePlayer() { return mode === 'hot' ? state.turn : myPlayer; }
 
 function onCellTap(i) {
   if (!state) return;
-  if (whyMode && coach) { explainAt(i); return; }
+  if (mode === 'review' || (whyMode && coach)) { explainAt(i); return; }
   if (state.status !== 'playing') return;
   if (mode === 'online' && !state.players[1]) return;
   const p = activePlayer();
@@ -280,12 +283,11 @@ function addOverlay(i, color) {
   (coachMarks.colors[i] = coachMarks.colors[i] || []).push(color);
 }
 
-function showCoachFeedback(ev, move, result) {
+// Advice shared by live coaching and game review. Sets coach marks as a
+// side effect; returns the explanation sentences (without the header).
+function adviceParts(ev, move, result) {
   const parts = [];
-  clearMarks();
-
   if (ev.kind === 'bomb') {
-    parts.push(`Your blast was expected to net ~${ev.bombExpected.toFixed(1)} mines and got ${result.minesHit.length}.`);
     if (ev.verdict === 'inaccuracy' || ev.verdict === 'mistake') {
       parts.push(`The richest 5×5 held ~${ev.bombBest.expected.toFixed(1)} expected mines — aim where the numbers point before spending it.`);
     }
@@ -293,8 +295,6 @@ function showCoachFeedback(ev, move, result) {
       parts.push(`The coach would have held the bomb: it shines on dense areas, desperation, or endgame grabs that skip 50/50 guessing.`);
     }
   } else {
-    const hit = result.type === 'mine';
-    parts.push(`Your press had ${pct(ev.chosenProb)} mine odds — ${hit ? (ev.chosenProb < 0.3 ? 'lucky hit!' : 'and it paid off.') : 'no mine.'}`);
     if (ev.verdict === 'missed-certain') {
       coachMarks.best = ev.certainMines[0];
       if (ev.whyBest >= 0) coachMarks.why = [ev.whyBest];
@@ -308,14 +308,25 @@ function showCoachFeedback(ev, move, result) {
       parts.push(`Stronger was ${chip('the marked cell', GOOD_COLOR)}: ${pct(ev.bestProb)} odds${ev.whyBest >= 0 ? ` — ${chip('this number', '#4da3ff')} implicates it` : ''}.`);
     }
     if (ev.chosenFloodRisk > 0.35 && ev.verdict !== 'best') {
-      parts.push(`Risky dive: ${pct(ev.chosenFloodRisk)} chance of blowing open an empty field${result.type === 'safe' && result.cells.length > 4 ? ` — and it opened ${result.cells.length} squares for your opponent` : ''}.`);
+      parts.push(`Risky dive: ${pct(ev.chosenFloodRisk)} chance of blowing open an empty field${result.type === 'safe' && result.cells.length > 4 ? ` — and it opened ${result.cells.length} squares` : ''}.`);
     }
   }
+  return parts;
+}
 
+function coachPanel(verdictHtml, parts, verdictClass) {
   const el = $('coach');
-  el.className = `coach v-${ev.verdict}`;
-  el.innerHTML = `<span class="cv">${VERDICT_LABEL[ev.verdict]}</span>${parts.join(' ')}`;
+  el.className = `coach v-${verdictClass}`;
+  el.innerHTML = `<span class="cv">${verdictHtml}</span>${parts.join(' ')}`;
   el.hidden = false;
+}
+
+function showCoachFeedback(ev, move, result) {
+  clearMarks();
+  const header = ev.kind === 'bomb'
+    ? `Your blast was expected to net ~${ev.bombExpected.toFixed(1)} mines and got ${result.minesHit.length}.`
+    : `Your press had ${pct(ev.chosenProb)} mine odds — ${result.type === 'mine' ? (ev.chosenProb < 0.3 ? 'lucky hit!' : 'and it paid off.') : 'no mine.'}`;
+  coachPanel(VERDICT_LABEL[ev.verdict], [header, ...adviceParts(ev, move, result)], ev.verdict);
 }
 
 function explainAt(i) {
@@ -383,6 +394,93 @@ function showHint() {
   render();
 }
 
+/* ---------- game review ---------- */
+let review = null; // { mines, moves, players, myPlayer, gmode, step, evals }
+
+function enterReview(data) {
+  clearTimeout(aiTimer);
+  net?.close();
+  net = null;
+  review = { ...data, step: data.moves.length, evals: {} };
+  mode = 'review';
+  coach = true;
+  myPlayer = data.myPlayer ?? 0;
+  resetFlags();
+  $('btn-hint').hidden = true;
+  show('game');
+  stepTo(review.step);
+}
+
+function replayTo(k) {
+  const s = gameFromMines(review.mines);
+  s.players = review.players;
+  let ev = null, res = null;
+  for (let j = 0; j < k; j++) {
+    const mv = review.moves[j];
+    const move = { type: mv.t === 'b' ? 'bomb' : 'reveal', index: mv.i };
+    if (j === k - 1) ev = review.evals[j] ??= coachEvaluate(s, move, mv.p);
+    res = mv.t === 'b' ? bomb(s, mv.i, mv.p) : reveal(s, mv.i, mv.p);
+  }
+  return { s, ev, res };
+}
+
+function stepTo(k) {
+  k = Math.max(0, Math.min(k, review.moves.length));
+  review.step = k;
+  const { s, ev, res } = replayTo(k);
+  state = s;
+  oddsCache = { seq: -1, prob: null };
+  clearMarks();
+  $('review-label').textContent = `${k}/${review.moves.length}`;
+  if (k === 0) {
+    coachPanel('Review.', ['Step through the game with the arrows. Tap any cell to ask why, or toggle Odds.'], 'good');
+  } else {
+    const mv = review.moves[k - 1];
+    const name = esc(s.players[mv.p]?.name || (mv.p === 0 ? 'Red' : 'Blue'));
+    const header = ev.kind === 'bomb'
+      ? `${name} bombed: ~${ev.bombExpected.toFixed(1)} expected, got ${res.minesHit.length}.`
+      : `${name} pressed at ${pct(ev.chosenProb)} odds — ${res.type === 'mine' ? 'mine!' : `no mine${res.cells.length > 4 ? `, opened ${res.cells.length} squares` : ''}.`}`;
+    coachMarks.pick = mv.i;
+    coachPanel(VERDICT_LABEL[ev.verdict], [header, ...adviceParts(ev, { type: mv.t === 'b' ? 'bomb' : 'reveal', index: mv.i }, res)], ev.verdict);
+  }
+  render();
+}
+
+function emptyStats() {
+  return { n: 0, best: 0, good: 0, inaccuracy: 0, mistake: 0, 'missed-certain': 0, 'missed-bomb': 0, dives: 0, divesOpened: 0, lucky: 0, read: 0 };
+}
+
+function computeStats(mines, moves, players) {
+  const s = gameFromMines(mines);
+  s.players = players;
+  const per = [emptyStats(), emptyStats()];
+  for (const mv of moves) {
+    const move = { type: mv.t === 'b' ? 'bomb' : 'reveal', index: mv.i };
+    const ev = coachEvaluate(s, move, mv.p);
+    const st = per[mv.p];
+    st.n++;
+    st[ev.verdict] = (st[ev.verdict] || 0) + 1;
+    const res = mv.t === 'b' ? bomb(s, mv.i, mv.p) : reveal(s, mv.i, mv.p);
+    if (ev.kind === 'reveal') {
+      if (ev.chosenFloodRisk > 0.35) {
+        st.dives++;
+        if (res.type === 'safe' && res.cells.length >= 5) st.divesOpened++;
+      }
+      if (res.type === 'mine' && ev.chosenProb < 0.3) st.lucky++;
+      if (res.type === 'mine' && ev.chosenProb >= 0.55) st.read++;
+    }
+  }
+  return per;
+}
+
+function statsHtml(st, label) {
+  const missed = [];
+  if (st['missed-certain']) missed.push(`<b>${st['missed-certain']}</b> sure mine${st['missed-certain'] > 1 ? 's' : ''}`);
+  if (st['missed-bomb']) missed.push(`<b>${st['missed-bomb']}</b> bomb moment${st['missed-bomb'] > 1 ? 's' : ''}`);
+  return `<div><span class="who">${esc(label)}</span> — <b>${st.best}</b> best · <b>${st.good}</b> good · <b>${st.inaccuracy}</b> inaccurate · <b>${st.mistake}</b> mistakes<br>` +
+    `Missed: ${missed.length ? missed.join(', ') : 'nothing!'} · Risky dives: <b>${st.dives}</b>${st.dives ? ` (${st.divesOpened} opened fields)` : ''} · Lucky hits: <b>${st.lucky}</b> · Well-read hits: <b>${st.read}</b></div>`;
+}
+
 /* ---------- AI ---------- */
 function scheduleAi() {
   if (mode !== 'ai' || !state || state.status !== 'playing' || state.turn === myPlayer) return;
@@ -403,6 +501,7 @@ function scheduleAi() {
 
 /* ---------- game over / history ---------- */
 function showGameOver() {
+  if (mode === 'review') return;
   const s = state;
   const over = $('gameover');
   if (!over.hidden) return;
@@ -410,7 +509,25 @@ function showGameOver() {
   const winName = s.players[s.winner]?.name || (s.winner === 0 ? 'Red' : 'Blue');
   $('gameover-title').textContent = mode === 'hot' ? `${winName} wins!` : iWon ? 'Victory!' : 'Defeat';
   $('gameover-sub').textContent = `${s.players[0]?.name || 'Red'} ${s.scores[0]} — ${s.scores[1]} ${s.players[1]?.name || 'Blue'}`;
+  const statsEl = $('gameover-stats');
+  try {
+    const per = computeStats(s.mines, s.moves, s.players);
+    statsEl.innerHTML = mode === 'hot'
+      ? statsHtml(per[0], s.players[0]?.name || 'Red') + statsHtml(per[1], s.players[1]?.name || 'Blue')
+      : statsHtml(per[myPlayer], 'You');
+    statsEl.hidden = false;
+  } catch {
+    statsEl.hidden = true;
+  }
   over.hidden = false;
+}
+
+function reviewCurrentGame() {
+  if (!state || !state.moves?.length) return;
+  enterReview({
+    mines: state.mines, moves: state.moves, players: state.players,
+    myPlayer: mode === 'hot' ? 0 : myPlayer, gmode: mode,
+  });
 }
 
 function maybeSaveResult() {
@@ -424,7 +541,10 @@ function maybeSaveResult() {
     scores: state.scores,
     winner: state.winner,
     won: mode === 'hot' ? null : state.winner === myPlayer,
+    replay: { mines: state.mines, moves: state.moves, myPlayer },
   });
+  // full replays are kept for the 20 most recent games
+  for (let i = 20; i < list.length; i++) delete list[i].replay;
   localStorage.setItem('mfe-history', JSON.stringify(list.slice(0, 100)));
 }
 
@@ -435,17 +555,30 @@ function renderHistory() {
     el.innerHTML = '<div class="history-empty">No games played yet.</div>';
     return;
   }
-  el.innerHTML = list.map(g => {
+  el.innerHTML = list.map((g, idx) => {
     const d = new Date(g.date);
     const when = d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const label = g.won === null ? `${g.names[g.winner]} won` : g.won ? 'You won' : 'You lost';
     const modeTag = { ai: 'vs AI', hot: 'local', online: 'online' }[g.mode] || g.mode;
+    const reviewBtn = g.replay?.moves?.length ? `<button class="link review-link" data-review="${idx}">Review</button>` : '';
     return `<div class="history-item ${g.won ? 'won' : ''}">
-      <div><div class="who">${esc(label)} · ${modeTag}</div><div class="when">${esc(g.names[0])} vs ${esc(g.names[1])} · ${when}</div></div>
+      <div><div class="who">${esc(label)} · ${modeTag}${reviewBtn}</div><div class="when">${esc(g.names[0])} vs ${esc(g.names[1])} · ${when}</div></div>
       <div class="score">${g.scores[0]}–${g.scores[1]}</div>
     </div>`;
   }).join('');
 }
+
+$('history-list').addEventListener('click', e => {
+  const btn = e.target.closest('[data-review]');
+  if (!btn) return;
+  const g = JSON.parse(localStorage.getItem('mfe-history') || '[]')[+btn.dataset.review];
+  if (!g?.replay) return;
+  enterReview({
+    mines: g.replay.mines, moves: g.replay.moves,
+    players: [{ name: g.names[0] }, { name: g.names[1] }],
+    myPlayer: g.replay.myPlayer ?? 0, gmode: g.mode,
+  });
+});
 
 function esc(s) { return String(s).replace(/[<>&"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c])); }
 
@@ -462,6 +595,9 @@ function resetFlags() {
   $('btn-odds').classList.toggle('on', oddsOn);
   $('btn-why').classList.remove('on');
   $('screen-game').classList.toggle('coach-on', coach);
+  $('btn-bomb').hidden = mode === 'review';
+  $('review-nav').hidden = mode !== 'review';
+  $('btn-why').classList.toggle('on', mode === 'review');
 }
 
 function startAi(level = 'casual', withCoach = false) {
@@ -593,6 +729,8 @@ function quit() {
   net?.close();
   net = null;
   state = null;
+  review = null;
+  mode = null;
   show('home');
 }
 
@@ -618,6 +756,11 @@ for (const el of document.querySelectorAll('.nav-back')) el.onclick = () => show
 
 $('btn-quit').onclick = quit;
 $('btn-home').onclick = quit;
+$('btn-review').onclick = () => { sfx.tap(); reviewCurrentGame(); };
+$('rv-first').onclick = () => { sfx.tap(); stepTo(0); };
+$('rv-prev').onclick = () => { sfx.tap(); stepTo(review.step - 1); };
+$('rv-next').onclick = () => { sfx.tap(); stepTo(review.step + 1); };
+$('rv-last').onclick = () => { sfx.tap(); stepTo(review.moves.length); };
 $('btn-rematch').onclick = () => { sfx.tap(); rematch(); };
 $('btn-bomb').onclick = () => {
   armed = !armed;

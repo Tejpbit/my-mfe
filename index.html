@@ -112,6 +112,13 @@
     <div id="coach" class="coach" hidden></div>
 
     <footer class="game-footer">
+      <div id="review-nav" class="review-nav" hidden>
+        <button class="btn nav-s" id="rv-first">&#9198;</button>
+        <button class="btn nav-s" id="rv-prev">&#9664;</button>
+        <span id="review-label" class="review-label">0/0</span>
+        <button class="btn nav-s" id="rv-next">&#9654;</button>
+        <button class="btn nav-s" id="rv-last">&#9197;</button>
+      </div>
       <div class="footer-row">
         <button class="btn bomb-btn" id="btn-bomb">
           <svg viewBox="0 0 24 24"><use href="#i-bomb"/></svg><span>Bomb</span>
@@ -127,8 +134,10 @@
       <div class="card gameover-card">
         <h2 id="gameover-title">Victory!</h2>
         <p id="gameover-sub"></p>
+        <div id="gameover-stats" class="gostats" hidden></div>
         <div class="row">
           <button class="btn btn-primary" id="btn-rematch">Rematch</button>
+          <button class="btn" id="btn-review">Review</button>
           <button class="btn" id="btn-home">Home</button>
         </div>
       </div>

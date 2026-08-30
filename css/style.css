@@ -297,6 +297,25 @@ input[type="text"]:focus { border-color: var(--blue); }
 .cell.coach-why { outline: 2px dashed var(--blue); outline-offset: -2px; }
 .cell.coach-pick { outline: 2px solid var(--gold); outline-offset: -2px; }
 .cell.coach-group { outline: 1px dashed rgba(139, 152, 169, 0.8); outline-offset: -3px; }
+.review-nav { display: flex; align-items: center; gap: 6px; }
+.nav-s { padding: 8px 14px; font-size: 14px; }
+.review-label { min-width: 64px; text-align: center; font-variant-numeric: tabular-nums; font-weight: 700; color: var(--muted); }
+
+.gostats {
+  text-align: left;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--muted);
+  background: var(--bg2);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 4px 0 10px;
+}
+.gostats b { color: var(--text); }
+.gostats .who { color: var(--text); font-weight: 700; }
+
+.history-item .review-link { margin-left: 10px; }
+
 .chip {
   font-weight: 700;
   padding: 0 5px;

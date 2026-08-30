@@ -42,7 +42,18 @@ export function newGame(rng = Math.random) {
     last: null,
     players: [null, null],
     seq: 0,
+    moves: [],
   };
+}
+
+// Rebuild a game position from a known mine layout (for replay/review).
+// Replaying the recorded moves is deterministic: the final layout already
+// reflects any first-click mine relocation, so that branch never re-fires.
+export function gameFromMines(mines) {
+  const s = newGame();
+  s.mines = mines.slice();
+  s.adj = computeAdj(s.mines);
+  return s;
 }
 
 function floodReveal(s, i) {
@@ -84,6 +95,8 @@ export function reveal(s, i, p, rng = Math.random) {
     s.adj = computeAdj(s.mines);
   }
   s.seq++;
+  if (!s.moves) s.moves = [];
+  s.moves.push({ t: 'r', i, p });
   if (s.mines[i]) {
     s.revealed[i] = true;
     s.owner[i] = p;
@@ -116,6 +129,8 @@ export function bombCells(center) {
 export function bomb(s, center, p) {
   if (!canBomb(s, p) || center < 0 || center >= SIZE) return null;
   s.seq++;
+  if (!s.moves) s.moves = [];
+  s.moves.push({ t: 'b', i: center, p });
   s.bombs[p] = false;
   const cells = [], minesHit = [];
   for (const i of bombCells(center)) {

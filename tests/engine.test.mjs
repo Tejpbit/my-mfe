@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { SIZE, MINES, WIN_SCORE, newGame, reveal, bomb, canBomb, bombCells, minesLeft, neighbors } from '../js/game.js';
+import { SIZE, MINES, WIN_SCORE, newGame, gameFromMines, reveal, bomb, canBomb, bombCells, minesLeft, neighbors } from '../js/game.js';
 import { aiMove, aiMoveExpert, analyze, exactProbs } from '../js/ai.js';
 
 function mulberry32(seed) {
@@ -144,6 +144,27 @@ for (let step = 0; step < 40 && s.status === 'playing'; step++) {
     if (s2.winner === expertSeat) expertWins++;
   }
   assert.ok(expertWins >= N * 0.6, `expert wins majority (${expertWins}/${N})`);
+}
+
+// moves are recorded and replaying them reproduces the final position exactly
+{
+  const g = newGame(mulberry32(2024));
+  const rngR = mulberry32(4048);
+  let guard = 0;
+  while (g.status === 'playing' && guard++ < 2000) {
+    const move = aiMove(g, g.turn, rngR);
+    if (move.type === 'bomb') bomb(g, move.index, g.turn);
+    else reveal(g, move.index, g.turn, rngR);
+  }
+  assert.ok(g.moves.length > 10, 'moves recorded');
+  const r = gameFromMines(g.mines);
+  for (const mv of g.moves) {
+    const res = mv.t === 'b' ? bomb(r, mv.i, mv.p) : reveal(r, mv.i, mv.p);
+    assert.ok(res, 'replayed move is legal');
+  }
+  assert.deepEqual(r.scores, g.scores, 'replay reproduces scores');
+  assert.equal(r.winner, g.winner, 'replay reproduces winner');
+  assert.deepEqual(r.revealed, g.revealed, 'replay reproduces board');
 }
 
 console.log('All engine tests passed.');
