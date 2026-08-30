@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { SIZE, MINES, WIN_SCORE, newGame, reveal, bomb, canBomb, bombCells, minesLeft, neighbors } from '../js/game.js';
-import { aiMove, analyze } from '../js/ai.js';
+import { aiMove, aiMoveExpert, analyze, exactProbs } from '../js/ai.js';
 
 function mulberry32(seed) {
   return () => {
@@ -101,6 +101,49 @@ for (let step = 0; step < 40 && s.status === 'playing'; step++) {
   const move = aiMove(s, s.turn, rng);
   const res = move.type === 'bomb' ? bomb(s, move.index, s.turn) : reveal(s, move.index, s.turn);
   assert.ok(res);
+}
+
+// expert AI: exact marginals sum to the remaining mine count, certainties are real
+{
+  const rngE = mulberry32(31337);
+  for (let seed = 0; seed < 5; seed++) {
+    const g = newGame(mulberry32(400 + seed));
+    let guard = 0;
+    while (g.status === 'playing' && guard++ < 60) {
+      const { prob, certainMines, exact } = exactProbs(g);
+      if (exact) {
+        const total = prob.reduce((a, b) => a + Math.max(0, b), 0);
+        assert.ok(Math.abs(total - minesLeft(g)) < 1e-6, `marginals sum to mines left (${total} vs ${minesLeft(g)})`);
+      }
+      for (const i of certainMines) assert.ok(g.mines[i], 'certain cell really is a mine');
+      for (const i of analyze(g).certainMines) {
+        assert.ok(prob[i] > 0.999, 'exact probs agree with heuristic certainties');
+      }
+      const move = aiMoveExpert(g, g.turn, rngE);
+      const res = move.type === 'bomb' ? bomb(g, move.index, g.turn) : reveal(g, move.index, g.turn, rngE);
+      assert.ok(res, 'expert move is legal');
+    }
+  }
+}
+
+// expert AI beats the casual AI (fixed seeds, alternating seats -> deterministic)
+{
+  let expertWins = 0;
+  const N = 20;
+  for (let g = 0; g < N; g++) {
+    const expertSeat = g % 2;
+    const s2 = newGame(mulberry32(1000 + g));
+    const rng2 = mulberry32(5000 + g);
+    let guard = 0;
+    while (s2.status === 'playing' && guard++ < 2000) {
+      const p = s2.turn;
+      const move = p === expertSeat ? aiMoveExpert(s2, p, rng2) : aiMove(s2, p, rng2);
+      const res = move.type === 'bomb' ? bomb(s2, move.index, p) : reveal(s2, move.index, p, rng2);
+      assert.ok(res);
+    }
+    if (s2.winner === expertSeat) expertWins++;
+  }
+  assert.ok(expertWins >= N * 0.6, `expert wins majority (${expertWins}/${N})`);
 }
 
 console.log('All engine tests passed.');

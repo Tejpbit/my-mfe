@@ -1,5 +1,5 @@
 import { SIZE, W, H, BOMB_RADIUS, WIN_SCORE, newGame, reveal, bomb, canBomb, bombCells, minesLeft } from './game.js';
-import { aiMove } from './ai.js';
+import { aiMove, aiMoveExpert } from './ai.js';
 import { Net } from './net.js';
 import { sfx, setSoundEnabled } from './sound.js';
 
@@ -27,6 +27,7 @@ let net = null;
 let aiming = -1;          // bomb aim cell, -1 = not aiming
 let armed = false;        // bomb button pressed, waiting for target
 let aiTimer = null;
+let aiLevel = 'casual';
 let saved = false;        // result recorded for current game
 
 /* ---------- screens ---------- */
@@ -34,7 +35,43 @@ const screens = ['home', 'game', 'tutorial', 'settings', 'history'];
 function show(name) {
   for (const s of screens) $(`screen-${s}`).hidden = s !== name;
   if (name === 'history') renderHistory();
+  if (name === 'home') updateContinue();
   window.scrollTo(0, 0);
+}
+
+/* ---------- AI game persistence ---------- */
+function saveAiGame() {
+  if (mode !== 'ai' || !state) return;
+  if (state.status === 'over') { localStorage.removeItem('mfe-ai-save'); return; }
+  localStorage.setItem('mfe-ai-save', JSON.stringify({ state, aiLevel, date: Date.now() }));
+}
+
+function updateContinue() {
+  const btn = $('btn-continue');
+  try {
+    const raw = localStorage.getItem('mfe-ai-save');
+    if (!raw) { btn.hidden = true; return; }
+    const { state: st, aiLevel: lvl } = JSON.parse(raw);
+    btn.textContent = `Continue vs ${lvl === 'expert' ? 'AI Expert' : 'AI'} · ${st.scores[0]}–${st.scores[1]}`;
+    btn.hidden = false;
+  } catch {
+    btn.hidden = true;
+  }
+}
+
+function resumeAiGame() {
+  try {
+    const { state: st, aiLevel: lvl } = JSON.parse(localStorage.getItem('mfe-ai-save'));
+    mode = 'ai'; myPlayer = 0; aiLevel = lvl === 'expert' ? 'expert' : 'casual';
+    state = st;
+    resetFlags();
+    show('game');
+    render();
+    scheduleAi();
+  } catch {
+    localStorage.removeItem('mfe-ai-save');
+    updateContinue();
+  }
 }
 
 /* ---------- board DOM ---------- */
@@ -174,6 +211,7 @@ function doMove(move, p) {
   playFx(result, p);
   render();
   if (mode === 'online') net?.publish({ t: 'state', state });
+  saveAiGame();
   maybeSaveResult();
   scheduleAi();
 }
@@ -195,12 +233,13 @@ function scheduleAi() {
   if (mode !== 'ai' || !state || state.status !== 'playing' || state.turn === myPlayer) return;
   clearTimeout(aiTimer);
   aiTimer = setTimeout(() => {
-    const move = aiMove(state, 1 - myPlayer);
+    const move = (aiLevel === 'expert' ? aiMoveExpert : aiMove)(state, 1 - myPlayer);
     if (!move) return;
     const result = move.type === 'bomb' ? bomb(state, move.index, 1 - myPlayer) : reveal(state, move.index, 1 - myPlayer);
     if (result) {
       playFx(result, 1 - myPlayer);
       render();
+      saveAiGame();
       maybeSaveResult();
       scheduleAi();
     }
@@ -262,13 +301,14 @@ function resetFlags() {
   $('screen-game').classList.remove('shake');
 }
 
-function startAi() {
-  mode = 'ai'; myPlayer = 0;
+function startAi(level = 'casual') {
+  mode = 'ai'; myPlayer = 0; aiLevel = level;
   state = newGame();
-  state.players = [{ name: settings.name, id: settings.id }, { name: 'AI', id: 'ai' }];
+  state.players = [{ name: settings.name, id: settings.id }, { name: level === 'expert' ? 'AI Expert' : 'AI', id: 'ai' }];
   resetFlags();
   show('game');
   render();
+  saveAiGame();
 }
 
 function startHotseat() {
@@ -378,7 +418,7 @@ function rematch() {
     fresh.seq = state.seq + 1;
     state = fresh;
     net.publish({ t: 'state', state });
-  } else if (mode === 'ai') { startAi(); return; }
+  } else if (mode === 'ai') { startAi(aiLevel); return; }
   else { startHotseat(); return; }
   resetFlags();
   render();
@@ -393,7 +433,9 @@ function quit() {
 }
 
 /* ---------- wire up ---------- */
-$('btn-ai').onclick = () => { sfx.tap(); startAi(); };
+$('btn-ai').onclick = () => { sfx.tap(); startAi('casual'); };
+$('btn-ai-expert').onclick = () => { sfx.tap(); startAi('expert'); };
+$('btn-continue').onclick = () => { sfx.tap(); resumeAiGame(); };
 $('btn-hotseat').onclick = () => { sfx.tap(); startHotseat(); };
 $('btn-create').onclick = () => { sfx.tap(); startOnline('create'); };
 $('btn-join').onclick = () => { sfx.tap(); startOnline('join'); };
