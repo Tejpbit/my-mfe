@@ -1008,17 +1008,19 @@ $('btn-tut-play').onclick = () => show('home');
 window.mfe = { get state() { return state; }, get mode() { return mode; }, get myPlayer() { return myPlayer; }, encodeGame, decodeGame, shareText };
 
 const sharedGame = new URLSearchParams(location.search).get('g');
+let sharedOpened = false;
 if (sharedGame) {
   try {
     const data = decodeGame(sharedGame);
     history.replaceState(null, '', location.pathname);
     enterReview(data);
+    sharedOpened = true;
   } catch {
     history.replaceState(null, '', location.pathname);
   }
 }
 
-if (!localStorage.getItem('mfe-tut-seen')) {
+if (!sharedOpened && !localStorage.getItem('mfe-tut-seen')) {
   localStorage.setItem('mfe-tut-seen', '1');
   show('tutorial');
 }
