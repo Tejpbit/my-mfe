@@ -248,7 +248,7 @@ function bestBombWindow(s, prob) {
 export function considerBomb(s, p, prob, bt = BOMB_TUNING) {
   const { center, expected } = bestBombWindow(s, prob);
   if (center < 0 || expected < bt.minE) return null;
-  const move = { type: 'bomb', index: center };
+  const move = { type: 'bomb', index: center, expected };
   if (s.scores[p] + expected >= WIN_SCORE) return move;
   if (expected >= bt.juicy) return move;
   const deficit = s.scores[1 - p] - s.scores[p];
@@ -262,6 +262,117 @@ export function considerBomb(s, p, prob, bt = BOMB_TUNING) {
   if (unrevealed <= bt.endUnrevealed && pBest <= bt.endGuess &&
       expected >= Math.max(bt.minE, minesLeft(s) * bt.endShare)) return move;
   return null;
+}
+
+export function floodRisk(s, prob, i) {
+  const ns = neighbors(i);
+  if (ns.some(j => s.owner[j] >= 0)) return 0;
+  let pZero = 1;
+  for (const j of ns) if (!s.revealed[j]) pZero *= 1 - prob[j];
+  return pZero;
+}
+
+export function scoreCells(s, prob, tuning = EXPERT_TUNING) {
+  const scores = new Array(SIZE).fill(-Infinity);
+  let best = -Infinity, bestIndex = -1;
+  for (let i = 0; i < SIZE; i++) {
+    if (s.revealed[i]) continue;
+    const pm = prob[i];
+    let hiddenN = 0;
+    for (const j of neighbors(i)) if (!s.revealed[j]) hiddenN++;
+    const missCost = (1 - pm) * (tuning.info * hiddenN + tuning.flood * floodRisk(s, prob, i));
+    scores[i] = tuning.mine * pm - missCost;
+    if (scores[i] > best) { best = scores[i]; bestIndex = i; }
+  }
+  return { scores, best, bestIndex };
+}
+
+// Which revealed number most strongly implicates `cell`? Used by the coach
+// to explain WHY a cell is (un)likely to be a mine.
+export function strongestConstraint(s, cell) {
+  let best = -1, bestRatio = -1;
+  for (const j of neighbors(cell)) {
+    if (!s.revealed[j] || s.mines[j] || s.adj[j] === 0) continue;
+    const ns = neighbors(j);
+    const found = ns.reduce((n, k) => n + (s.owner[k] >= 0 ? 1 : 0), 0);
+    const hidden = ns.filter(k => !s.revealed[k]).length;
+    if (!hidden) continue;
+    const ratio = (s.adj[j] - found) / hidden;
+    if (ratio > bestRatio) { bestRatio = ratio; best = j; }
+  }
+  return best;
+}
+
+// Full derivation of one cell's odds, for training mode's "Why?" inspector.
+export function explainCell(s, i) {
+  if (s.revealed[i]) {
+    if (s.mines[i] || s.adj[i] === 0) return null;
+    const ns = neighbors(i);
+    const found = ns.reduce((n, k) => n + (s.owner[k] >= 0 ? 1 : 0), 0);
+    return { kind: 'number', total: s.adj[i], found, need: s.adj[i] - found, hiddenCells: ns.filter(k => !s.revealed[k]) };
+  }
+  const { prob } = exactProbs(s);
+  const M = minesLeft(s);
+  let unknown = 0;
+  for (let k = 0; k < SIZE; k++) if (!s.revealed[k]) unknown++;
+  const cons = [];
+  for (const j of neighbors(i)) {
+    if (!s.revealed[j] || s.mines[j] || s.adj[j] === 0) continue;
+    const ns2 = neighbors(j);
+    const found = ns2.reduce((n, k) => n + (s.owner[k] >= 0 ? 1 : 0), 0);
+    const hiddenCells = ns2.filter(k => !s.revealed[k]);
+    if (hiddenCells.length) cons.push({ cell: j, num: s.adj[j], need: s.adj[j] - found, hiddenCells });
+  }
+  let component = null;
+  if (cons.length) {
+    const { components } = buildComponents(s);
+    const comp = components.find(c => c.cells.includes(i));
+    if (comp && comp.cells.length <= COMPONENT_CAP) {
+      const e = enumerateComponent(comp);
+      const li = comp.cells.indexOf(i);
+      let layouts = 0, mineLayouts = 0;
+      for (let k = 0; k < e.count.length; k++) { layouts += e.count[k]; mineLayouts += e.cellCount[k][li]; }
+      component = { size: comp.cells.length, numbers: comp.cons.length, layouts, mineLayouts };
+    }
+  }
+  const naive = cons.length ? Math.max(...cons.map(c => c.need / c.hiddenCells.length)) : (unknown ? M / unknown : 0);
+  return { kind: 'cell', p: prob[i], left: M, unknown, cons, naive, component };
+}
+
+// Pre-move evaluation of a player's chosen move, for training mode.
+export function coachEvaluate(s, move, p) {
+  const { prob, certainMines } = exactProbs(s);
+  const { scores, best, bestIndex } = scoreCells(s, prob);
+  const bombAdvice = canBomb(s, p) ? considerBomb(s, p, prob) : null;
+  const out = {
+    prob, certainMines, bestIndex,
+    bestProb: bestIndex >= 0 ? prob[bestIndex] : 0,
+    bombAdvice,
+    whyBest: bestIndex >= 0 ? strongestConstraint(s, bestIndex) : -1,
+  };
+  if (move.type === 'bomb') {
+    let expected = 0;
+    for (const i of bombCells(move.index)) if (!s.revealed[i]) expected += prob[i];
+    const window = bestBombWindow(s, prob);
+    out.kind = 'bomb';
+    out.bombExpected = expected;
+    out.bombBest = window;
+    out.verdict = bombAdvice ? (expected >= window.expected - 0.75 ? 'best' : 'inaccuracy')
+      : (expected >= window.expected - 0.5 && expected >= 4 ? 'good' : 'mistake');
+    return out;
+  }
+  out.kind = 'reveal';
+  out.chosenProb = prob[move.index];
+  out.chosenFloodRisk = floodRisk(s, prob, move.index);
+  out.whyChosen = strongestConstraint(s, move.index);
+  if (certainMines.length && out.chosenProb > 0.999) out.verdict = 'best';
+  else if (certainMines.length) out.verdict = 'missed-certain';
+  else if (bombAdvice && bombAdvice.expected >= 5) out.verdict = 'missed-bomb';
+  else {
+    const delta = best - scores[move.index];
+    out.verdict = delta <= 0.25 ? 'best' : delta <= 0.8 ? 'good' : delta <= 1.8 ? 'inaccuracy' : 'mistake';
+  }
+  return out;
 }
 
 export function aiMoveExpert(s, p, rng = Math.random, opts = {}) {
@@ -278,22 +389,7 @@ export function aiMoveExpert(s, p, rng = Math.random, opts = {}) {
     if (move) return move;
   }
 
-  const scores = new Array(SIZE).fill(-Infinity);
-  let best = -Infinity;
-  for (let i = 0; i < SIZE; i++) {
-    if (s.revealed[i]) continue;
-    const pm = prob[i];
-    const ns = neighbors(i);
-    let pZero = 0, hiddenN = 0;
-    if (!ns.some(j => s.owner[j] >= 0)) {
-      pZero = 1;
-      for (const j of ns) if (!s.revealed[j]) pZero *= 1 - prob[j];
-    }
-    for (const j of ns) if (!s.revealed[j]) hiddenN++;
-    const missCost = (1 - pm) * (tuning.info * hiddenN + tuning.flood * pZero);
-    scores[i] = tuning.mine * pm - missCost;
-    if (scores[i] > best) best = scores[i];
-  }
+  const { scores, best } = scoreCells(s, prob, tuning);
   const candidates = [];
   for (let i = 0; i < SIZE; i++) {
     if (!s.revealed[i] && scores[i] >= best - 0.05) candidates.push(i);

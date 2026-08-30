@@ -1,5 +1,5 @@
 import { SIZE, W, H, BOMB_RADIUS, WIN_SCORE, newGame, reveal, bomb, canBomb, bombCells, minesLeft } from './game.js';
-import { aiMove, aiMoveExpert } from './ai.js';
+import { aiMove, aiMoveExpert, coachEvaluate, exactProbs, explainCell } from './ai.js';
 import { Net } from './net.js';
 import { sfx, setSoundEnabled } from './sound.js';
 
@@ -28,6 +28,11 @@ let aiming = -1;          // bomb aim cell, -1 = not aiming
 let armed = false;        // bomb button pressed, waiting for target
 let aiTimer = null;
 let aiLevel = 'casual';
+let coach = false;
+let coachMarks = { best: -1, why: [], pick: -1, group: [], colors: {} };
+let oddsOn = false;
+let whyMode = false;
+let oddsCache = { seq: -1, prob: null };
 let saved = false;        // result recorded for current game
 
 /* ---------- screens ---------- */
@@ -43,7 +48,7 @@ function show(name) {
 function saveAiGame() {
   if (mode !== 'ai' || !state) return;
   if (state.status === 'over') { localStorage.removeItem('mfe-ai-save'); return; }
-  localStorage.setItem('mfe-ai-save', JSON.stringify({ state, aiLevel, date: Date.now() }));
+  localStorage.setItem('mfe-ai-save', JSON.stringify({ state, aiLevel, coach, date: Date.now() }));
 }
 
 function updateContinue() {
@@ -51,8 +56,8 @@ function updateContinue() {
   try {
     const raw = localStorage.getItem('mfe-ai-save');
     if (!raw) { btn.hidden = true; return; }
-    const { state: st, aiLevel: lvl } = JSON.parse(raw);
-    btn.textContent = `Continue vs ${lvl === 'expert' ? 'AI Expert' : 'AI'} · ${st.scores[0]}–${st.scores[1]}`;
+    const { state: st, aiLevel: lvl, coach: co } = JSON.parse(raw);
+    btn.textContent = `Continue ${co ? 'training' : `vs ${lvl === 'expert' ? 'AI Expert' : 'AI'}`} · ${st.scores[0]}–${st.scores[1]}`;
     btn.hidden = false;
   } catch {
     btn.hidden = true;
@@ -61,8 +66,8 @@ function updateContinue() {
 
 function resumeAiGame() {
   try {
-    const { state: st, aiLevel: lvl } = JSON.parse(localStorage.getItem('mfe-ai-save'));
-    mode = 'ai'; myPlayer = 0; aiLevel = lvl === 'expert' ? 'expert' : 'casual';
+    const { state: st, aiLevel: lvl, coach: co } = JSON.parse(localStorage.getItem('mfe-ai-save'));
+    mode = 'ai'; myPlayer = 0; aiLevel = lvl === 'expert' ? 'expert' : 'casual'; coach = !!co;
     state = st;
     resetFlags();
     show('game');
@@ -120,6 +125,8 @@ function render() {
     const wasRevealed = el.classList.contains('revealed');
     el.className = 'cell';
     el.textContent = '';
+    el.style.boxShadow = '';
+    el.style.background = '';
     if (s.revealed[i]) {
       el.classList.add('revealed');
       if (!wasRevealed) el.classList.add('pop');
@@ -144,6 +151,27 @@ function render() {
       if (aimSet.has(i)) el.classList.add('aim');
     }
     if (corners[i]) el.classList.add(corners[i]);
+    if (coach) {
+      if (i === coachMarks.best && !s.revealed[i]) el.classList.add('coach-best');
+      if (coachMarks.why.includes(i)) el.classList.add('coach-why');
+      if (i === coachMarks.pick) el.classList.add('coach-pick');
+      if (coachMarks.group.includes(i)) el.classList.add('coach-group');
+      const oc = coachMarks.colors[i];
+      if (oc && oc.length) {
+        el.style.boxShadow = oc.map((c, k) => `inset 0 0 0 ${2 * (k + 1)}px ${c}`).join(', ');
+        if (!s.revealed[i]) el.style.background = `color-mix(in srgb, ${oc[0]} 22%, #2a3346)`;
+      }
+    }
+  }
+
+  if (coach && oddsOn && s.status === 'playing' && s.turn === myPlayer) {
+    if (oddsCache.seq !== s.seq) oddsCache = { seq: s.seq, prob: exactProbs(s).prob };
+    for (let i = 0; i < SIZE; i++) {
+      if (!s.revealed[i]) {
+        cells[i].classList.add('oddsview');
+        cells[i].textContent = Math.round(oddsCache.prob[i] * 100);
+      }
+    }
   }
 
   $('p0-score').textContent = s.scores[0];
@@ -185,7 +213,9 @@ function render() {
 function activePlayer() { return mode === 'hot' ? state.turn : myPlayer; }
 
 function onCellTap(i) {
-  if (!state || state.status !== 'playing') return;
+  if (!state) return;
+  if (whyMode && coach) { explainAt(i); return; }
+  if (state.status !== 'playing') return;
   if (mode === 'online' && !state.players[1]) return;
   const p = activePlayer();
   if (mode !== 'hot' && state.turn !== myPlayer) return;
@@ -206,8 +236,10 @@ function onCellTap(i) {
 }
 
 function doMove(move, p) {
+  const evaluation = coach && p === myPlayer ? coachEvaluate(state, move, p) : null;
   const result = move.type === 'bomb' ? bomb(state, move.index, p) : reveal(state, move.index, p);
   if (!result) return;
+  if (evaluation) showCoachFeedback(evaluation, move, result);
   playFx(result, p);
   render();
   if (mode === 'online') net?.publish({ t: 'state', state });
@@ -226,6 +258,129 @@ function playFx(last, mover) {
     setTimeout(() => (iWon ? sfx.win() : sfx.lose()), 350);
     if (!iWon) $('screen-game').classList.add('shake');
   }
+}
+
+/* ---------- coach ---------- */
+const pct = x => `${Math.round(x * 100)}%`;
+const VERDICT_LABEL = {
+  best: 'Best move.', good: 'Good.', inaccuracy: 'Inaccuracy.', mistake: 'Mistake.',
+  'missed-certain': 'Missed a sure thing!', 'missed-bomb': 'Bomb moment missed!',
+};
+
+function clearMarks() {
+  coachMarks = { best: -1, why: [], pick: -1, group: [], colors: {} };
+}
+
+const WHY_COLORS = ['#58d5c9', '#b48eff', '#ff8fab', '#6fd18a'];
+const PICK_COLOR = '#ffb02e';
+const GOOD_COLOR = '#6fd18a';
+const chip = (text, color) => `<span class="chip" style="color:${color};border-color:${color}">${text}</span>`;
+
+function addOverlay(i, color) {
+  (coachMarks.colors[i] = coachMarks.colors[i] || []).push(color);
+}
+
+function showCoachFeedback(ev, move, result) {
+  const parts = [];
+  clearMarks();
+
+  if (ev.kind === 'bomb') {
+    parts.push(`Your blast was expected to net ~${ev.bombExpected.toFixed(1)} mines and got ${result.minesHit.length}.`);
+    if (ev.verdict === 'inaccuracy' || ev.verdict === 'mistake') {
+      parts.push(`The richest 5×5 held ~${ev.bombBest.expected.toFixed(1)} expected mines — aim where the numbers point before spending it.`);
+    }
+    if (!ev.bombAdvice && ev.verdict !== 'good') {
+      parts.push(`The coach would have held the bomb: it shines on dense areas, desperation, or endgame grabs that skip 50/50 guessing.`);
+    }
+  } else {
+    const hit = result.type === 'mine';
+    parts.push(`Your press had ${pct(ev.chosenProb)} mine odds — ${hit ? (ev.chosenProb < 0.3 ? 'lucky hit!' : 'and it paid off.') : 'no mine.'}`);
+    if (ev.verdict === 'missed-certain') {
+      coachMarks.best = ev.certainMines[0];
+      if (ev.whyBest >= 0) coachMarks.why = [ev.whyBest];
+      parts.push(`A ${chip('guaranteed mine', GOOD_COLOR)} was available — ${chip('this number', '#4da3ff')} accounts for every one of its hidden neighbors, so they must all be mines.`);
+    } else if (ev.verdict === 'missed-bomb') {
+      coachMarks.best = ev.bombAdvice.index;
+      parts.push(`The bomb was ripe: ~${ev.bombAdvice.expected.toFixed(1)} expected mines around ${chip('the marked cell', GOOD_COLOR)}, with no guessing.`);
+    } else if (ev.verdict !== 'best' && ev.bestIndex >= 0 && ev.bestIndex !== move.index) {
+      coachMarks.best = ev.bestIndex;
+      if (ev.whyBest >= 0) coachMarks.why = [ev.whyBest];
+      parts.push(`Stronger was ${chip('the marked cell', GOOD_COLOR)}: ${pct(ev.bestProb)} odds${ev.whyBest >= 0 ? ` — ${chip('this number', '#4da3ff')} implicates it` : ''}.`);
+    }
+    if (ev.chosenFloodRisk > 0.35 && ev.verdict !== 'best') {
+      parts.push(`Risky dive: ${pct(ev.chosenFloodRisk)} chance of blowing open an empty field${result.type === 'safe' && result.cells.length > 4 ? ` — and it opened ${result.cells.length} squares for your opponent` : ''}.`);
+    }
+  }
+
+  const el = $('coach');
+  el.className = `coach v-${ev.verdict}`;
+  el.innerHTML = `<span class="cv">${VERDICT_LABEL[ev.verdict]}</span>${parts.join(' ')}`;
+  el.hidden = false;
+}
+
+function explainAt(i) {
+  const ex = explainCell(state, i);
+  const el = $('coach');
+  clearMarks();
+  if (!ex) {
+    el.className = 'coach v-good';
+    el.innerHTML = '<span class="cv">Why?</span>Tap a covered cell to see where its odds come from, or a number to see what it still demands.';
+    el.hidden = false;
+    render();
+    return;
+  }
+  const parts = [];
+  if (ex.kind === 'number') {
+    const color = WHY_COLORS[0];
+    addOverlay(i, PICK_COLOR);
+    for (const j of ex.hiddenCells) addOverlay(j, color);
+    parts.push(`${chip('This ' + ex.total, PICK_COLOR)} touches ${ex.total} mine${ex.total > 1 ? 's' : ''}, ${ex.found} already flagged.`);
+    parts.push(ex.need === 0
+      ? `It's satisfied — the ${chip('shaded cells', color)} are all safe.`
+      : ex.need === ex.hiddenCells.length
+        ? `It still needs ${ex.need} — so the ${chip('shaded cells', color)} are ALL mines.`
+        : `It still needs ${ex.need} of the ${ex.hiddenCells.length} ${chip('shaded cells', color)} (${pct(ex.need / ex.hiddenCells.length)} each, before combining).`);
+  } else {
+    addOverlay(i, PICK_COLOR);
+    if (!ex.cons.length) {
+      parts.push(`No number touches ${chip('this cell', PICK_COLOR)}. Only the global count speaks: ${ex.left} mines over ${ex.unknown} unknown cells ≈ ${pct(ex.p)}.`);
+    } else {
+      ex.cons.slice(0, WHY_COLORS.length).forEach((c, k) => {
+        const color = WHY_COLORS[k];
+        addOverlay(c.cell, color);
+        for (const j of c.hiddenCells) addOverlay(j, color);
+        parts.push(`${chip('The ' + c.num, color)} needs ${c.need} more of its ${c.hiddenCells.length} ${chip('shaded', color)} cells → ${pct(c.need / c.hiddenCells.length)} alone.`);
+      });
+      if (ex.component && ex.component.layouts > 1) {
+        const raw = ex.component.mineLayouts / ex.component.layouts;
+        parts.push(`Counting every layout that satisfies all linked numbers: ${ex.component.layouts} exist, ${chip('this cell', PICK_COLOR)} is a mine in ${Math.round(ex.component.mineLayouts)}.`);
+        parts.push(Math.abs(raw - ex.p) > 0.03
+          ? `Layouts using fewer mines weigh more (more room for the other ${ex.left} mines elsewhere) → ${pct(ex.p)}.`
+          : `→ ${pct(ex.p)}.`);
+      } else {
+        parts.push(`Combined exactly across overlapping numbers → ${pct(ex.p)}${Math.abs(ex.naive - ex.p) > 0.03 ? ` (naive read: ${pct(ex.naive)})` : ''}.`);
+      }
+    }
+  }
+  el.className = 'coach v-good';
+  el.innerHTML = `<span class="cv">Why ${ex.kind === 'cell' ? pct(ex.p) : 'this number'}?</span>${parts.join(' ')}`;
+  el.hidden = false;
+  render();
+}
+
+function showHint() {
+  if (!state || state.status !== 'playing' || state.turn !== myPlayer) return;
+  const move = aiMoveExpert(state, myPlayer);
+  if (!move) return;
+  clearMarks();
+  coachMarks.best = move.index;
+  const el = $('coach');
+  el.className = 'coach v-good';
+  el.innerHTML = move.type === 'bomb'
+    ? `<span class="cv">Hint:</span> bomb the area around ${chip('the marked cell', GOOD_COLOR)} (~${move.expected.toFixed(1)} expected mines).`
+    : `<span class="cv">Hint:</span> ${chip('the marked cell', GOOD_COLOR)} is the coach's pick (${pct(exactProbs(state).prob[move.index])} mine odds).`;
+  el.hidden = false;
+  render();
 }
 
 /* ---------- AI ---------- */
@@ -297,14 +452,23 @@ function esc(s) { return String(s).replace(/[<>&"]/g, c => ({ '<': '&lt;', '>': 
 /* ---------- start games ---------- */
 function resetFlags() {
   armed = false; aiming = -1; saved = false;
+  clearMarks();
+  oddsCache = { seq: -1, prob: null };
+  whyMode = false;
   $('gameover').hidden = true;
   $('screen-game').classList.remove('shake');
+  $('coach').hidden = true;
+  $('btn-hint').hidden = $('btn-odds').hidden = $('btn-why').hidden = !coach;
+  $('btn-odds').classList.toggle('on', oddsOn);
+  $('btn-why').classList.remove('on');
+  $('screen-game').classList.toggle('coach-on', coach);
 }
 
-function startAi(level = 'casual') {
-  mode = 'ai'; myPlayer = 0; aiLevel = level;
+function startAi(level = 'casual', withCoach = false) {
+  mode = 'ai'; myPlayer = 0; aiLevel = level; coach = withCoach;
   state = newGame();
-  state.players = [{ name: settings.name, id: settings.id }, { name: level === 'expert' ? 'AI Expert' : 'AI', id: 'ai' }];
+  const aiName = withCoach ? 'AI (training)' : level === 'expert' ? 'AI Expert' : 'AI';
+  state.players = [{ name: settings.name, id: settings.id }, { name: aiName, id: 'ai' }];
   resetFlags();
   show('game');
   render();
@@ -312,7 +476,7 @@ function startAi(level = 'casual') {
 }
 
 function startHotseat() {
-  mode = 'hot'; myPlayer = 0;
+  mode = 'hot'; myPlayer = 0; coach = false;
   state = newGame();
   state.players = [{ name: 'Red', id: 'p0' }, { name: 'Blue', id: 'p1' }];
   resetFlags();
@@ -359,7 +523,7 @@ async function startOnline(role) {
 }
 
 function enterOnlineGame(role) {
-  mode = 'online';
+  mode = 'online'; coach = false;
   resetFlags();
   $('btn-create').disabled = $('btn-join').disabled = false;
   if (role === 'create') {
@@ -418,7 +582,7 @@ function rematch() {
     fresh.seq = state.seq + 1;
     state = fresh;
     net.publish({ t: 'state', state });
-  } else if (mode === 'ai') { startAi(aiLevel); return; }
+  } else if (mode === 'ai') { startAi(aiLevel, coach); return; }
   else { startHotseat(); return; }
   resetFlags();
   render();
@@ -435,7 +599,15 @@ function quit() {
 /* ---------- wire up ---------- */
 $('btn-ai').onclick = () => { sfx.tap(); startAi('casual'); };
 $('btn-ai-expert').onclick = () => { sfx.tap(); startAi('expert'); };
+$('btn-train').onclick = () => { sfx.tap(); startAi('casual', true); };
 $('btn-continue').onclick = () => { sfx.tap(); resumeAiGame(); };
+$('btn-hint').onclick = () => { sfx.tap(); showHint(); };
+$('btn-odds').onclick = () => {
+  oddsOn = !oddsOn;
+  $('btn-odds').classList.toggle('on', oddsOn);
+  sfx.tap();
+  render();
+};
 $('btn-hotseat').onclick = () => { sfx.tap(); startHotseat(); };
 $('btn-create').onclick = () => { sfx.tap(); startOnline('create'); };
 $('btn-join').onclick = () => { sfx.tap(); startOnline('join'); };
@@ -450,7 +622,24 @@ $('btn-rematch').onclick = () => { sfx.tap(); rematch(); };
 $('btn-bomb').onclick = () => {
   armed = !armed;
   aiming = -1;
+  whyMode = false;
+  $('btn-why').classList.remove('on');
   sfx.tap();
+  render();
+};
+$('btn-why').onclick = () => {
+  whyMode = !whyMode;
+  armed = false; aiming = -1;
+  $('btn-why').classList.toggle('on', whyMode);
+  sfx.tap();
+  if (whyMode) {
+    const el = $('coach');
+    el.className = 'coach v-good';
+    el.innerHTML = '<span class="cv">Why?</span>Tap any covered cell to see where its odds come from, or a number to see what it still demands. Tap Why? again to go back to playing.';
+    el.hidden = false;
+  } else {
+    clearMarks();
+  }
   render();
 };
 $('btn-bomb-cancel').onclick = () => { armed = false; aiming = -1; render(); };

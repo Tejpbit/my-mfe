@@ -62,6 +62,7 @@
         <button class="btn btn-primary" id="btn-ai-expert">vs AI &middot; Expert</button>
       </div>
       <button class="btn" id="btn-continue" hidden>Continue</button>
+      <button class="btn" id="btn-train">Training &middot; play with a coach</button>
       <button class="btn" id="btn-hotseat">Two players &middot; this device</button>
     </div>
 
@@ -108,10 +109,17 @@
       <div id="board" class="board"></div>
     </div>
 
+    <div id="coach" class="coach" hidden></div>
+
     <footer class="game-footer">
-      <button class="btn bomb-btn" id="btn-bomb">
-        <svg viewBox="0 0 24 24"><use href="#i-bomb"/></svg><span>Bomb</span>
-      </button>
+      <div class="footer-row">
+        <button class="btn bomb-btn" id="btn-bomb">
+          <svg viewBox="0 0 24 24"><use href="#i-bomb"/></svg><span>Bomb</span>
+        </button>
+        <button class="btn coach-btn" id="btn-hint" hidden>Hint</button>
+        <button class="btn coach-btn" id="btn-odds" hidden>Odds</button>
+        <button class="btn coach-btn" id="btn-why" hidden>Why?</button>
+      </div>
       <div id="bomb-hint" class="bomb-hint" hidden>Aim on the board &middot; tap the aimed cell to detonate <button class="link" id="btn-bomb-cancel">cancel</button></div>
     </footer>
 
@@ -150,6 +158,10 @@
       <div class="tut-item">
         <span class="tut-icon num-demo" style="color:var(--red)">&#9733;</span>
         <p><strong>Strategy basics:</strong> when your opponent finds a mine, its neighbors are hot &mdash; mines cluster around big numbers. Opening in the middle reveals the most information. A "0" flood-fill gives away a lot of board: sometimes that helps your opponent more than you. (The very first click of a game never opens a flood &mdash; starting isn't a punishment.)</p>
+      </div>
+      <div class="tut-item">
+        <span class="tut-icon num-demo" style="color:#6fd18a">?</span>
+        <p><strong>Learn with Training mode.</strong> Play with a coach that grades every move and explains the better option. Toggle <em>Odds</em> to see each cell's exact mine probability, and <em>Why?</em> to tap any cell and walk through where its odds come from &mdash; which numbers implicate it and how the valid mine layouts count up.</p>
       </div>
       <button class="btn btn-primary" id="btn-tut-play">Let's play</button>
     </div>
