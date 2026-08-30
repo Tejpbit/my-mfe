@@ -99,7 +99,7 @@ body {
 .hint { color: var(--muted); font-size: 13px; margin: 4px 0 12px; }
 .hint code { color: var(--text); }
 
-input[type="text"] {
+input[type="text"], select {
   width: 100%;
   font: inherit;
   font-size: 16px;
@@ -110,7 +110,7 @@ input[type="text"] {
   padding: 12px 14px;
   outline: none;
 }
-input[type="text"]:focus { border-color: var(--blue); }
+input[type="text"]:focus, select:focus { border-color: var(--blue); }
 
 .row { display: flex; gap: 10px; margin-top: 10px; }
 .row .btn { flex: 1; }
@@ -268,7 +268,9 @@ input[type="text"]:focus { border-color: var(--blue); }
 .cell[data-n="7"] { color: #ffd166; }
 .cell[data-n="8"] { color: #c9d1d9; }
 
-.game-footer { display: flex; flex-direction: column; align-items: center; gap: 8px; min-height: 64px; }
+#screen-game { min-height: 100dvh; }
+.game-footer { display: flex; flex-direction: column; align-items: center; gap: 8px; min-height: 64px; margin-top: auto; }
+.review-nav { justify-content: center; }
 .footer-row { display: flex; gap: 8px; }
 .coach-btn { padding: 10px 16px; }
 .coach-btn.on { border-color: var(--blue); color: var(--blue); }
@@ -282,6 +284,9 @@ input[type="text"]:focus { border-color: var(--blue); }
   font-size: 13px;
   line-height: 1.5;
   color: var(--text);
+  min-height: 84px;
+  max-height: 118px;
+  overflow-y: auto;
 }
 .coach .cv { font-weight: 800; margin-right: 6px; }
 .coach.v-best { border-left-color: #6fd18a; }
@@ -341,6 +346,37 @@ input[type="text"]:focus { border-color: var(--blue); }
 .gameover-card { text-align: center; width: min(100%, 340px); }
 .gameover-card h2 { font-size: 26px; margin-bottom: 2px; }
 .gameover-card p { color: var(--muted); margin: 0 0 8px; }
+
+/* ---------- wide screens: board left, info column right ---------- */
+@media (min-width: 900px) {
+  #app { max-width: 1040px; }
+  #screen-game {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 320px;
+    grid-template-rows: auto auto auto auto auto auto 1fr;
+    grid-template-areas:
+      "gheader gheader"
+      "gscore  gscore"
+      "gbanner gbanner"
+      "gboard  gnav"
+      "gboard  gcoach"
+      "gboard  gfooter"
+      "gboard  .";
+    column-gap: 20px;
+    align-content: start;
+    min-height: 0;
+  }
+  .game-header { grid-area: gheader; }
+  .scorebar { grid-area: gscore; }
+  .turn-banner { grid-area: gbanner; }
+  .board-wrap { grid-area: gboard; align-items: start; }
+  #review-nav { grid-area: gnav; }
+  #coach { grid-area: gcoach; max-height: 300px; min-height: 0; }
+  .game-footer { grid-area: gfooter; margin-top: 0; min-height: 0; align-items: stretch; }
+  .footer-row { justify-content: center; }
+  .board { width: min(100%, calc(100dvh - 200px), 640px); }
+  #screen-game.coach-on .board { width: min(100%, calc(100dvh - 200px), 640px); }
+}
 
 .shake { animation: shake 0.4s ease; }
 @keyframes shake {

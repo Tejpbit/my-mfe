@@ -115,6 +115,13 @@ export function canBomb(s, p) {
   return s.status === 'playing' && s.turn === p && s.bombs[p] && s.scores[p] <= s.scores[1 - p];
 }
 
+// A bomb always blasts a full 5x5: centers near the edge slide inward.
+export function clampBombCenter(i) {
+  const x = Math.min(Math.max(i % W, BOMB_RADIUS), W - 1 - BOMB_RADIUS);
+  const y = Math.min(Math.max((i / W) | 0, BOMB_RADIUS), H - 1 - BOMB_RADIUS);
+  return y * W + x;
+}
+
 export function bombCells(center) {
   const x0 = center % W, y0 = (center / W) | 0, out = [];
   for (let dy = -BOMB_RADIUS; dy <= BOMB_RADIUS; dy++) {
@@ -128,6 +135,7 @@ export function bombCells(center) {
 
 export function bomb(s, center, p) {
   if (!canBomb(s, p) || center < 0 || center >= SIZE) return null;
+  center = clampBombCenter(center);
   s.seq++;
   if (!s.moves) s.moves = [];
   s.moves.push({ t: 'b', i: center, p });

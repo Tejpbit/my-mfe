@@ -41,6 +41,16 @@
       <circle cx="22.6" cy="2.8" r="0.8"/>
     </g>
   </symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24">
+    <g stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <line x1="12" y1="2.5" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="21.5"/>
+      <line x1="2.5" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="21.5" y2="12"/>
+      <line x1="5.3" y1="5.3" x2="7" y2="7"/><line x1="17" y1="17" x2="18.7" y2="18.7"/>
+      <line x1="18.7" y1="5.3" x2="17" y2="7"/><line x1="7" y1="17" x2="5.3" y2="18.7"/>
+    </g>
+    <circle cx="12" cy="12" r="5.5" fill="none" stroke="currentColor" stroke-width="2"/>
+    <circle cx="12" cy="12" r="2" fill="currentColor"/>
+  </symbol>
   <symbol id="i-back" viewBox="0 0 24 24">
     <path d="M14.5 5 L 7.5 12 L 14.5 19" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
   </symbol>
@@ -99,6 +109,7 @@
         <span class="p-score" id="p1-score">0</span>
         <span class="p-name" id="p1-name">Blue</span>
       </div>
+      <button class="icon-btn" id="btn-gear" title="Settings"><svg viewBox="0 0 24 24"><use href="#i-gear"/></svg></button>
     </header>
 
     <div class="scorebar"><div class="scorebar-red" id="scorebar-red"></div><div class="scorebar-blue" id="scorebar-blue"></div><div class="scorebar-mark"></div></div>
@@ -109,16 +120,17 @@
       <div id="board" class="board"></div>
     </div>
 
+    <div id="review-nav" class="review-nav" hidden>
+      <button class="btn nav-s" id="rv-first">&#9198;</button>
+      <button class="btn nav-s" id="rv-prev">&#9664;</button>
+      <span id="review-label" class="review-label">0/0</span>
+      <button class="btn nav-s" id="rv-next">&#9654;</button>
+      <button class="btn nav-s" id="rv-last">&#9197;</button>
+    </div>
+
     <div id="coach" class="coach" hidden></div>
 
     <footer class="game-footer">
-      <div id="review-nav" class="review-nav" hidden>
-        <button class="btn nav-s" id="rv-first">&#9198;</button>
-        <button class="btn nav-s" id="rv-prev">&#9664;</button>
-        <span id="review-label" class="review-label">0/0</span>
-        <button class="btn nav-s" id="rv-next">&#9654;</button>
-        <button class="btn nav-s" id="rv-last">&#9197;</button>
-      </div>
       <div class="footer-row">
         <button class="btn bomb-btn" id="btn-bomb">
           <svg viewBox="0 0 24 24"><use href="#i-bomb"/></svg><span>Bomb</span>
@@ -178,7 +190,7 @@
 
   <!-- ============ SETTINGS ============ -->
   <section id="screen-settings" class="screen" hidden>
-    <header class="subheader"><button class="icon-btn nav-back"><svg viewBox="0 0 24 24"><use href="#i-back"/></svg></button><h2>Settings</h2></header>
+    <header class="subheader"><button class="icon-btn" id="settings-back"><svg viewBox="0 0 24 24"><use href="#i-back"/></svg></button><h2>Settings</h2></header>
     <div class="card">
       <label class="field">
         <span>Your name</span>
@@ -187,6 +199,15 @@
       <label class="field field-row">
         <span>Sound effects</span>
         <input type="checkbox" id="set-sound" checked>
+      </label>
+      <label class="field">
+        <span>AI thinking speed</span>
+        <select id="set-aispeed">
+          <option value="instant">Instant</option>
+          <option value="fast">Fast</option>
+          <option value="normal">Normal</option>
+          <option value="slow">Slow</option>
+        </select>
       </label>
     </div>
     <details class="card advanced">

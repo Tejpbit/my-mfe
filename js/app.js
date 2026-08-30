@@ -1,4 +1,4 @@
-import { SIZE, W, H, BOMB_RADIUS, WIN_SCORE, newGame, gameFromMines, reveal, bomb, canBomb, bombCells, minesLeft } from './game.js';
+import { SIZE, W, H, BOMB_RADIUS, WIN_SCORE, newGame, gameFromMines, reveal, bomb, canBomb, bombCells, clampBombCenter, minesLeft } from './game.js';
 import { aiMove, aiMoveExpert, coachEvaluate, exactProbs, explainCell } from './ai.js';
 import { Net } from './net.js';
 import { sfx, setSoundEnabled } from './sound.js';
@@ -13,6 +13,8 @@ const settings = {
   set mqtt(v) { localStorage.setItem('mfe-mqtt', v); },
   get sound() { return localStorage.getItem('mfe-sound') !== '0'; },
   set sound(v) { localStorage.setItem('mfe-sound', v ? '1' : '0'); },
+  get aiSpeed() { return localStorage.getItem('mfe-aispeed') || 'normal'; },
+  set aiSpeed(v) { localStorage.setItem('mfe-aispeed', v); },
   get id() {
     let id = localStorage.getItem('mfe-id');
     if (!id) { id = Math.random().toString(36).slice(2, 10); localStorage.setItem('mfe-id', id); }
@@ -98,8 +100,10 @@ boardEl.addEventListener('click', e => {
 boardEl.addEventListener('pointerover', e => {
   if (!armed || e.pointerType === 'touch' || e.pointerType === 'pen') return;
   const el = e.target.closest('.cell');
-  if (el && aiming !== +el.dataset.i) {
-    aiming = +el.dataset.i;
+  if (!el) return;
+  const center = clampBombCenter(+el.dataset.i);
+  if (aiming !== center) {
+    aiming = center;
     render();
   }
 });
@@ -224,11 +228,12 @@ function onCellTap(i) {
   if (mode !== 'hot' && state.turn !== myPlayer) return;
 
   if (armed) {
-    if (aiming === i) {
-      doMove({ type: 'bomb', index: i }, p);
+    const center = clampBombCenter(i);
+    if (aiming === center) {
+      doMove({ type: 'bomb', index: center }, p);
       armed = false; aiming = -1;
     } else {
-      aiming = i;
+      aiming = center;
       sfx.tap();
       render();
     }
@@ -482,9 +487,12 @@ function statsHtml(st, label) {
 }
 
 /* ---------- AI ---------- */
+const AI_DELAYS = { instant: [60, 40], fast: [220, 220], normal: [600, 700], slow: [1300, 1200] };
+
 function scheduleAi() {
   if (mode !== 'ai' || !state || state.status !== 'playing' || state.turn === myPlayer) return;
   clearTimeout(aiTimer);
+  const [base, jitter] = AI_DELAYS[settings.aiSpeed] || AI_DELAYS.normal;
   aiTimer = setTimeout(() => {
     const move = (aiLevel === 'expert' ? aiMoveExpert : aiMove)(state, 1 - myPlayer);
     if (!move) return;
@@ -496,7 +504,7 @@ function scheduleAi() {
       maybeSaveResult();
       scheduleAi();
     }
-  }, 600 + Math.random() * 700);
+  }, base + Math.random() * jitter);
 }
 
 /* ---------- game over / history ---------- */
@@ -749,9 +757,16 @@ $('btn-odds').onclick = () => {
 $('btn-hotseat').onclick = () => { sfx.tap(); startHotseat(); };
 $('btn-create').onclick = () => { sfx.tap(); startOnline('create'); };
 $('btn-join').onclick = () => { sfx.tap(); startOnline('join'); };
+let settingsReturn = 'home';
 $('btn-tutorial').onclick = () => show('tutorial');
 $('btn-history').onclick = () => show('history');
-$('btn-settings').onclick = () => show('settings');
+$('btn-settings').onclick = () => { settingsReturn = 'home'; show('settings'); };
+$('btn-gear').onclick = () => { settingsReturn = 'game'; show('settings'); };
+$('settings-back').onclick = () => {
+  const target = settingsReturn === 'game' && state ? 'game' : 'home';
+  show(target);
+  if (target === 'game') render();
+};
 for (const el of document.querySelectorAll('.nav-back')) el.onclick = () => show('home');
 
 $('btn-quit').onclick = quit;
@@ -792,6 +807,8 @@ $('set-name').onchange = e => { settings.name = e.target.value.trim() || 'Player
 $('set-sound').checked = settings.sound;
 setSoundEnabled(settings.sound);
 $('set-sound').onchange = e => { settings.sound = e.target.checked; setSoundEnabled(e.target.checked); };
+$('set-aispeed').value = settings.aiSpeed;
+$('set-aispeed').onchange = e => { settings.aiSpeed = e.target.value; };
 $('set-mqtt').value = settings.mqtt;
 $('set-mqtt').onchange = e => { settings.mqtt = e.target.value.trim() || DEFAULT_MQTT; };
 $('btn-mqtt-default').onclick = () => { settings.mqtt = DEFAULT_MQTT; $('set-mqtt').value = DEFAULT_MQTT; };

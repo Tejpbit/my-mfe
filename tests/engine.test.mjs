@@ -58,8 +58,14 @@ assert.equal(s.bombs[1], false);
 assert.equal(s.turn, 0, 'bomb passes the turn');
 assert.equal(bomb(s, 0, 1), null, 'bomb only once');
 
-// corner blast is clamped
-assert.equal(bombCells(0).length, 9);
+// bombing near an edge slides the center inward: always a full 5x5
+{
+  const g = newGame(mulberry32(11));
+  assert.ok(canBomb(g, 0));
+  const res = bomb(g, 0, 0);
+  assert.equal(res.center, 2 * 16 + 2, 'corner bomb center moved in to (2,2)');
+  assert.equal(bombCells(res.center).length, 25, 'blast covers a full 5x5');
+}
 
 // win detection: play a full AI-vs-AI game
 s = newGame(mulberry32(1234));
