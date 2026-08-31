@@ -346,6 +346,10 @@ input[type="text"]:focus, select:focus { border-color: var(--blue); }
 .cmp-bar i { position: absolute; top: 0; bottom: 0; display: block; border-radius: 4px; }
 .cmp-bar.l i { right: 0; }
 .cmp-bar.r i { left: 0; }
+.stats-help { margin-top: 10px; font-size: 11.5px; }
+.stats-help summary { cursor: pointer; color: var(--blue); }
+.stats-help p { margin: 8px 0 0; line-height: 1.5; }
+.stats-help b { color: var(--text); }
 
 .history-item .review-link { margin-left: 10px; }
 

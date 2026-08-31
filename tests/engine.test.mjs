@@ -152,6 +152,33 @@ for (let step = 0; step < 40 && s.status === 'playing'; step++) {
   assert.ok(expertWins >= N * 0.6, `expert wins majority (${expertWins}/${N})`);
 }
 
+// constraint propagation: satisfied numbers force cells safe, and numbers
+// needing all remaining cells force mines — even chained through each other
+{
+  const g = newGame(mulberry32(1));
+  g.mines.fill(false);
+  // flagged mine + a satisfied 1 next to it; a 3 whose other candidates the 1 rules out
+  g.mines[0] = true;                       // (0,0) mine, flagged
+  g.mines[4] = g.mines[16 + 3] = g.mines[16 + 4] = true;  // (4,0), (3,1), (4,1)
+  let placed = 4;
+  for (let i = 96; i < SIZE && placed < MINES; i++) if (!g.mines[i]) { g.mines[i] = true; placed++; }
+  g.adj = g.mines.map((_, i) => neighbors(i).filter(n => g.mines[n]).length);
+  g.revealed.fill(false);
+  g.owner.fill(-1);
+  g.revealed[0] = true; g.owner[0] = 1; g.scores = [0, 1];  // flag at (0,0)
+  g.revealed[1] = true;                                      // the satisfied "1" at (1,0)
+  g.revealed[3] = true;                                      // the "3" at (3,0)
+  assert.equal(g.adj[1], 1, 'the 1 is satisfied by the flag');
+  assert.equal(g.adj[3], 3);
+  const { prob, certainMines, exact } = exactProbs(g);
+  assert.ok(exact, 'position solved exactly');
+  // the satisfied 1 rules out (2,0),(0,1),(1,1),(2,1)...
+  for (const j of [2, 16, 17, 18]) assert.ok(prob[j] < 1e-9, `cell ${j} forced safe by the satisfied 1`);
+  // ...leaving the 3 with exactly its three mines: (4,0),(3,1),(4,1)
+  for (const j of [4, 19, 20]) assert.ok(prob[j] > 0.999999, `cell ${j} forced mine`);
+  for (const j of [4, 19, 20]) assert.ok(certainMines.includes(j), `certain mine ${j} detected`);
+}
+
 // moves are recorded and replaying them reproduces the final position exactly
 {
   const g = newGame(mulberry32(2024));

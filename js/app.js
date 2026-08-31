@@ -373,14 +373,20 @@ function explainAt(i) {
         for (const j of c.hiddenCells) addOverlay(j, color);
         parts.push(`${chip('The ' + c.num, color)} needs ${c.need} more of its ${c.hiddenCells.length} ${chip('shaded', color)} cells → ${pct(c.need / c.hiddenCells.length)} alone.`);
       });
-      if (ex.component && ex.component.layouts > 1) {
+      if (ex.forced === 0) {
+        parts.push(`Deduction: other numbers already account for all their mines, ruling this cell out — provably safe → 0%.`);
+      } else if (ex.forced === 1) {
+        parts.push(`Deduction: once other numbers rule out the safe cells, a number needs ALL of its remaining hidden cells — provably a mine → 100%.`);
+      } else if (ex.component && ex.component.layouts > 1) {
         const raw = ex.component.mineLayouts / ex.component.layouts;
         parts.push(`Counting every layout that satisfies all linked numbers: ${ex.component.layouts} exist, ${chip('this cell', PICK_COLOR)} is a mine in ${Math.round(ex.component.mineLayouts)}.`);
         parts.push(Math.abs(raw - ex.p) > 0.03
           ? `Layouts using fewer mines weigh more (more room for the other ${ex.left} mines elsewhere) → ${pct(ex.p)}.`
           : `→ ${pct(ex.p)}.`);
+      } else if (ex.exact) {
+        parts.push(`Combined exactly across overlapping numbers → ${pct(ex.p)}${ex.naive != null && Math.abs(ex.naive - ex.p) > 0.03 ? ` (naive read: ${pct(ex.naive)})` : ''}.`);
       } else {
-        parts.push(`Combined exactly across overlapping numbers → ${pct(ex.p)}${Math.abs(ex.naive - ex.p) > 0.03 ? ` (naive read: ${pct(ex.naive)})` : ''}.`);
+        parts.push(`≈ ${pct(ex.p)} — this area is too tangled to enumerate fully, so this is an estimate.`);
       }
     }
   }
@@ -626,15 +632,22 @@ function statsBoxHtml(per, s, meSeat) {
   const vbar = st => `<div class="vbar">${segs(st).filter(([, v]) => v > 0)
     .map(([k, v]) => `<div class="vseg" style="flex:${v};background:${V_COLORS[k]}"></div>`).join('') || '<div class="vseg" style="flex:1;background:var(--line)"></div>'}</div>`;
 
+  const TIPS = {
+    performance: 'Average move quality, 0-100%. Every move is compared to the best available move at that moment, judged before the outcome: risk costs points even when it pays off, and taking the best available guess scores full marks.',
+    missed: 'Guaranteed mines or clearly ripe bombs that were available but not taken.',
+    dives: 'Presses with a high chance of blowing open an empty area, handing the opponent free information. Counted whether or not it actually blew open — and even if the press hit a mine.',
+    lucky: 'Mines found on presses with under 30% odds: bad guess, good result.',
+    read: 'Mines found on presses with at least 55% odds: earned by reading the board.',
+  };
   const rows = [
-    ['Missed chances', st => st['missed-certain'] + st['missed-bomb']],
-    ['Risky dives', st => st.dives],
-    ['Lucky hits', st => st.lucky],
-    ['Well-read hits', st => st.read],
+    ['Missed chances', st => st['missed-certain'] + st['missed-bomb'], TIPS.missed],
+    ['Risky dives', st => st.dives, TIPS.dives],
+    ['Lucky hits', st => st.lucky, TIPS.lucky],
+    ['Well-read hits', st => st.read, TIPS.read],
   ];
-  const cmp = rows.map(([label, f]) => {
+  const cmp = rows.map(([label, f, tip]) => {
     const va = f(a), vb = f(b), max = Math.max(va, vb, 1);
-    return `<div class="cmp">
+    return `<div class="cmp" title="${tip}">
       <span class="cmp-v">${va}</span>
       <div class="cmp-bar l"><i style="width:${(va / max) * 100}%;background:${seatColor(meSeat)}"></i></div>
       <span class="cmp-label">${label}</span>
@@ -642,11 +655,18 @@ function statsBoxHtml(per, s, meSeat) {
       <span class="cmp-v">${vb}</span>
     </div>`;
   }).join('');
+  const help = `<details class="stats-help"><summary>What do these numbers mean?</summary>
+    <p><b>Performance</b> — ${TIPS.performance}</p>
+    <p><b>Missed chances</b> — ${TIPS.missed}</p>
+    <p><b>Risky dives</b> — ${TIPS.dives}</p>
+    <p><b>Lucky hits</b> — ${TIPS.lucky}</p>
+    <p><b>Well-read hits</b> — ${TIPS.read}</p>
+  </details>`;
 
   return `
     <div class="acc-row">
       <div class="acc"><span class="acc-num" style="color:${seatColor(meSeat)}">${Math.round(performanceScore(a) * 100)}%</span><span class="acc-name">${leftName}</span></div>
-      <span class="acc-label">performance</span>
+      <span class="acc-label" title="${TIPS.performance}">performance</span>
       <div class="acc right"><span class="acc-num" style="color:${seatColor(opp)}">${Math.round(performanceScore(b) * 100)}%</span><span class="acc-name">${name(opp)}</span></div>
     </div>
     <div class="vbar-line"><span class="vbar-name">${leftName}</span>${vbar(a)}</div>
@@ -657,7 +677,8 @@ function statsBoxHtml(per, s, meSeat) {
       <span><i style="background:${V_COLORS.inaccuracy}"></i>inaccurate</span>
       <span><i style="background:${V_COLORS.bad}"></i>poor/missed</span>
     </div>
-    ${cmp}`;
+    ${cmp}
+    ${help}`;
 }
 
 /* ---------- AI ---------- */

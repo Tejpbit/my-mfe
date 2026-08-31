@@ -62,9 +62,10 @@ function nCr(n, r) {
   return Math.exp(logFact[n] - logFact[r] - logFact[n - r]);
 }
 
-const COMPONENT_CAP = 26;
+const COMPONENT_CAP = 34;
+const NODE_BUDGET = 250000;
 
-function buildComponents(s) {
+function buildConstraints(s) {
   const constraints = [];
   for (let i = 0; i < SIZE; i++) {
     if (!s.revealed[i] || s.mines[i] || s.adj[i] === 0) continue;
@@ -73,6 +74,42 @@ function buildComponents(s) {
     const cells = ns.filter(j => !s.revealed[j]);
     if (cells.length) constraints.push({ cells, req: s.adj[i] - found });
   }
+  return constraints;
+}
+
+// Iterate the two forcing rules to a fixpoint: a satisfied number makes its
+// remaining cells safe, a number needing all its remaining cells makes them
+// mines. This resolves cells outright AND splits the border into far smaller
+// components before enumeration.
+function propagate(constraints) {
+  const forced = new Map();
+  let changed = true, guard = 0;
+  while (changed && guard++ < 300) {
+    changed = false;
+    for (const c of constraints) {
+      const cells = c.cells.filter(j => !forced.has(j));
+      if (!cells.length) continue;
+      const req = c.req - c.cells.reduce((n, j) => n + (forced.get(j) === 1 ? 1 : 0), 0);
+      if (req <= 0) {
+        for (const j of cells) forced.set(j, 0);
+        changed = true;
+      } else if (req >= cells.length) {
+        for (const j of cells) forced.set(j, 1);
+        changed = true;
+      }
+    }
+  }
+  const reduced = [];
+  for (const c of constraints) {
+    const cells = c.cells.filter(j => !forced.has(j));
+    if (!cells.length) continue;
+    const req = c.req - c.cells.reduce((n, j) => n + (forced.get(j) === 1 ? 1 : 0), 0);
+    reduced.push({ cells, req: Math.max(0, Math.min(req, cells.length)) });
+  }
+  return { forced, reduced };
+}
+
+function buildComponentsFrom(constraints) {
   const cellToCons = new Map();
   constraints.forEach((c, ci) => c.cells.forEach(j => {
     if (!cellToCons.has(j)) cellToCons.set(j, []);
@@ -103,37 +140,42 @@ function buildComponents(s) {
       })),
     });
   }
-  return { components, borderSet: new Set(cellToCons.keys()) };
+  return components;
 }
 
 // Enumerate all consistent 0/1 assignments of one component's cells.
 // Returns count[k] = #solutions with k mines, cellCount[k][j] = #solutions
 // with k mines where local cell j is a mine.
+function heuristicComponent(comp) {
+  // Last resort for a component too tangled to enumerate: per-constraint
+  // ratios, approximated as a single fractional "solution".
+  const n = comp.cells.length;
+  const count = new Float64Array(n + 1);
+  const cellCount = Array.from({ length: n + 1 }, () => new Float64Array(n));
+  const p = new Float64Array(n);
+  for (const c of comp.cons) {
+    const ratio = c.req / c.idxs.length;
+    for (const li of c.idxs) p[li] = Math.max(p[li], ratio);
+  }
+  const k = Math.min(n, Math.round(p.reduce((a, b) => a + b, 0)));
+  count[k] = 1;
+  for (let j = 0; j < n; j++) cellCount[k][j] = p[j];
+  return { count, cellCount, exact: false };
+}
+
 function enumerateComponent(comp) {
   const n = comp.cells.length;
+  if (n > COMPONENT_CAP) return heuristicComponent(comp);
   const count = new Float64Array(n + 1);
   const cellCount = Array.from({ length: n + 1 }, () => new Float64Array(n));
   const cellCons = Array.from({ length: n }, () => []);
   const state = comp.cons.map(c => ({ req: c.req, remaining: c.idxs.length, have: 0 }));
   comp.cons.forEach((c, ci) => c.idxs.forEach(li => cellCons[li].push(ci)));
 
-  if (n > COMPONENT_CAP) {
-    // Too big to enumerate: fall back to per-constraint ratios, approximated
-    // as a single fractional "solution" at the expected mine count.
-    const p = new Float64Array(n);
-    for (const c of comp.cons) {
-      const ratio = c.req / c.idxs.length;
-      for (const li of c.idxs) p[li] = Math.max(p[li], ratio);
-    }
-    const k = Math.min(n, Math.round(p.reduce((a, b) => a + b, 0)));
-    count[k] = 1;
-    for (let j = 0; j < n; j++) cellCount[k][j] = p[j];
-    return { count, cellCount, exact: false };
-  }
-
   const assign = new Uint8Array(n);
-  let placed = 0;
+  let placed = 0, nodes = 0, aborted = false;
   (function rec(i) {
+    if (aborted || ++nodes > NODE_BUDGET) { aborted = true; return; }
     if (i === n) {
       count[placed]++;
       const cc = cellCount[placed];
@@ -152,6 +194,7 @@ function enumerateComponent(comp) {
       for (const ci of cellCons[i]) { state[ci].have -= v; state[ci].remaining++; }
     }
   })(0);
+  if (aborted) return heuristicComponent(comp);
   return { count, cellCount, exact: true };
 }
 
@@ -166,17 +209,26 @@ function convolve(a, b) {
 
 export function exactProbs(s) {
   const M = minesLeft(s);
-  const { components, borderSet } = buildComponents(s);
+  const { forced, reduced } = propagate(buildConstraints(s));
+  const components = buildComponentsFrom(reduced);
   const enums = components.map(enumerateComponent);
+  let forcedMines = 0;
+  forced.forEach(v => { forcedMines += v; });
+  const Mr = M - forcedMines;
+
+  const inBorder = new Set(forced.keys());
+  for (const comp of components) for (const j of comp.cells) inBorder.add(j);
   let freeCells = 0;
-  for (let i = 0; i < SIZE; i++) if (!s.revealed[i] && !borderSet.has(i)) freeCells++;
+  for (let i = 0; i < SIZE; i++) if (!s.revealed[i] && !inBorder.has(i)) freeCells++;
 
   const prob = new Array(SIZE).fill(-1);
+  forced.forEach((v, j) => { prob[j] = v; });
+
   // Weight distribution over total border mines, per component and combined.
   let convAll = new Float64Array([1]);
   for (const e of enums) convAll = convolve(convAll, e.count);
   let W = 0;
-  for (let k = 0; k < convAll.length; k++) W += convAll[k] * nCr(freeCells, M - k);
+  for (let k = 0; k < convAll.length; k++) W += convAll[k] * nCr(freeCells, Mr - k);
   if (!(W > 0)) return { ...analyze(s), exact: false };
 
   for (let c = 0; c < components.length; c++) {
@@ -187,7 +239,7 @@ export function exactProbs(s) {
     // when this component holds k mines.
     const T = new Float64Array(count.length);
     for (let k = 0; k < count.length; k++) {
-      for (let ko = 0; ko < others.length; ko++) T[k] += others[ko] * nCr(freeCells, M - k - ko);
+      for (let ko = 0; ko < others.length; ko++) T[k] += others[ko] * nCr(freeCells, Mr - k - ko);
     }
     components[c].cells.forEach((cell, j) => {
       let sum = 0;
@@ -199,7 +251,7 @@ export function exactProbs(s) {
   let outsideP = 0;
   if (freeCells > 0) {
     let sum = 0;
-    for (let k = 0; k < convAll.length; k++) sum += convAll[k] * nCr(freeCells - 1, M - k - 1);
+    for (let k = 0; k < convAll.length; k++) sum += convAll[k] * nCr(freeCells - 1, Mr - k - 1);
     outsideP = sum / W;
   }
   for (let i = 0; i < SIZE; i++) {
@@ -216,7 +268,7 @@ export function exactProbs(s) {
 // hidden neighbors it touches) and can dive into a flood if the cell turns
 // out to be a zero. Weights tuned by self-play against the plain
 // max-probability policy.
-export const EXPERT_TUNING = { mine: 10, info: 0.05, flood: 2 };
+export const EXPERT_TUNING = { mine: 10, info: 0.05, flood: 2, freebie: 3 };
 
 // Bomb doctrine: the engine only allows bombing while not leading; on top of
 // that, only spend it when the moment is right —
@@ -274,13 +326,28 @@ export function floodRisk(s, prob, i) {
 
 export function scoreCells(s, prob, tuning = EXPERT_TUNING) {
   const scores = new Array(SIZE).fill(-Infinity);
+  // A miss can hand the opponent free mines: if a number needs all-but-one of
+  // its hidden cells, revealing one of them safe makes the rest certain. This
+  // is why a 50/50 pair guess has ~zero net expected value.
+  const freebieAt = new Float64Array(SIZE);
+  for (let j = 0; j < SIZE; j++) {
+    if (!s.revealed[j] || s.mines[j] || s.adj[j] === 0) continue;
+    const ns = neighbors(j);
+    const found = ns.reduce((n, k) => n + (s.owner[k] >= 0 ? 1 : 0), 0);
+    const hidden = ns.filter(k => !s.revealed[k]);
+    const req = s.adj[j] - found;
+    if (hidden.length >= 2 && req === hidden.length - 1) {
+      for (const k of hidden) freebieAt[k] += req;
+    }
+  }
   let best = -Infinity, bestIndex = -1;
   for (let i = 0; i < SIZE; i++) {
     if (s.revealed[i]) continue;
     const pm = prob[i];
     let hiddenN = 0;
     for (const j of neighbors(i)) if (!s.revealed[j]) hiddenN++;
-    const missCost = (1 - pm) * (tuning.info * hiddenN + tuning.flood * floodRisk(s, prob, i));
+    const freebies = Math.min(freebieAt[i], 3);
+    const missCost = (1 - pm) * (tuning.info * hiddenN + tuning.flood * floodRisk(s, prob, i) + (tuning.freebie || 0) * freebies);
     scores[i] = tuning.mine * pm - missCost;
     if (scores[i] > best) { best = scores[i]; bestIndex = i; }
   }
@@ -311,7 +378,7 @@ export function explainCell(s, i) {
     const found = ns.reduce((n, k) => n + (s.owner[k] >= 0 ? 1 : 0), 0);
     return { kind: 'number', total: s.adj[i], found, need: s.adj[i] - found, hiddenCells: ns.filter(k => !s.revealed[k]) };
   }
-  const { prob } = exactProbs(s);
+  const { prob, exact } = exactProbs(s);
   const M = minesLeft(s);
   let unknown = 0;
   for (let k = 0; k < SIZE; k++) if (!s.revealed[k]) unknown++;
@@ -323,20 +390,28 @@ export function explainCell(s, i) {
     const hiddenCells = ns2.filter(k => !s.revealed[k]);
     if (hiddenCells.length) cons.push({ cell: j, num: s.adj[j], need: s.adj[j] - found, hiddenCells });
   }
+  const { forced, reduced } = propagate(buildConstraints(s));
+  const out = { kind: 'cell', p: prob[i], left: M, unknown, cons, exact };
+  if (forced.has(i)) {
+    out.forced = forced.get(i);
+    return out;
+  }
   let component = null;
   if (cons.length) {
-    const { components } = buildComponents(s);
-    const comp = components.find(c => c.cells.includes(i));
-    if (comp && comp.cells.length <= COMPONENT_CAP) {
+    const comp = buildComponentsFrom(reduced).find(c => c.cells.includes(i));
+    if (comp) {
       const e = enumerateComponent(comp);
-      const li = comp.cells.indexOf(i);
-      let layouts = 0, mineLayouts = 0;
-      for (let k = 0; k < e.count.length; k++) { layouts += e.count[k]; mineLayouts += e.cellCount[k][li]; }
-      component = { size: comp.cells.length, numbers: comp.cons.length, layouts, mineLayouts };
+      if (e.exact) {
+        const li = comp.cells.indexOf(i);
+        let layouts = 0, mineLayouts = 0;
+        for (let k = 0; k < e.count.length; k++) { layouts += e.count[k]; mineLayouts += e.cellCount[k][li]; }
+        component = { size: comp.cells.length, numbers: comp.cons.length, layouts, mineLayouts };
+      }
     }
   }
-  const naive = cons.length ? Math.max(...cons.map(c => c.need / c.hiddenCells.length)) : (unknown ? M / unknown : 0);
-  return { kind: 'cell', p: prob[i], left: M, unknown, cons, naive, component };
+  out.component = component;
+  out.naive = cons.length ? Math.max(...cons.map(c => c.need / c.hiddenCells.length)) : (unknown ? M / unknown : 0);
+  return out;
 }
 
 // Pre-move evaluation of a player's chosen move, for training mode.
