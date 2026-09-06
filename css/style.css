@@ -213,7 +213,6 @@ input[type="text"]:focus, select:focus { border-color: var(--blue); }
   touch-action: pan-y;
   -webkit-touch-callout: none;
 }
-.board-view.zoomed { touch-action: none; }
 .board-view.dragging .cell { cursor: grabbing; }
 #screen-game.coach-on .board-view { width: min(100%, calc(100dvh - 330px), 560px); }
 .board {
@@ -459,3 +458,21 @@ input[type="text"]:focus, select:focus { border-color: var(--blue); }
   20% { transform: translateX(-6px); } 40% { transform: translateX(6px); }
   60% { transform: translateX(-4px); } 80% { transform: translateX(4px); }
 }
+
+/* ---------- zoomed: the game screen becomes a full-viewport layer ---------- */
+#screen-game.zoomed {
+  position: fixed; inset: 0; z-index: 40;
+  display: flex; flex-direction: column; gap: 6px;
+  padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+  background: var(--bg);
+  animation: none;
+}
+#screen-game.zoomed > *:not(.overlay) { width: 100%; max-width: 1040px; margin: 0 auto; }
+#screen-game.zoomed #coach,
+#screen-game.zoomed .scorebar,
+#screen-game.zoomed .rv-chart,
+#screen-game.zoomed .rv-legend { display: none; }
+#screen-game.zoomed .turn-banner { min-height: 0; }
+#screen-game.zoomed .board-wrap { flex: 1; min-height: 0; max-width: none; display: flex; align-items: stretch; }
+#screen-game.zoomed .board-view { flex: 1; width: auto; height: auto; min-height: 0; aspect-ratio: auto; touch-action: none; }
+#screen-game.zoomed .game-footer { margin-top: 0; min-height: 0; }

@@ -101,36 +101,59 @@ boardEl.addEventListener('click', e => {
 });
 
 /* ---------- zoom & pan ---------- */
-// The board keeps its layout size and is scaled/translated inside the
-// viewport (.board-view); tx/ty are in viewport pixels, origin top-left.
+// Zoomed in, the game screen turns into a fixed full-viewport layer and the
+// board fills everything between header and footer. The board keeps a square
+// layout size and is scaled/translated inside the viewport (.board-view);
+// tx/ty are viewport pixels. Positions during gestures are tracked as board
+// fractions (0..1) so a layout jump mid-gesture keeps the point under the
+// fingers where it is.
 const viewEl = $('board-view');
+const screenGame = $('screen-game');
 const ZOOM_MIN = 1, ZOOM_MAX = 4, ZOOM_PRESET = 2;
 let zoom = 1, tx = 0, ty = 0;
 let suppressClick = false;
 const pointers = new Map();
 let gesture = null;
 
+function boardSize() {
+  return zoom > 1 ? Math.min(viewEl.clientWidth, viewEl.clientHeight) : viewEl.clientWidth;
+}
+
 function applyView() {
-  const vw = viewEl.clientWidth;
   if (zoom <= 1.02) { zoom = 1; tx = 0; ty = 0; }
-  tx = Math.min(0, Math.max(vw - vw * zoom, tx));
-  ty = Math.min(0, Math.max(vw - vw * zoom, ty));
+  screenGame.classList.toggle('zoomed', zoom > 1);
+  const vw = viewEl.clientWidth, vh = viewEl.clientHeight;
+  const B = boardSize(), size = B * zoom;
+  boardEl.style.width = zoom > 1 ? `${B}px` : '';
+  tx = size <= vw ? (vw - size) / 2 : Math.min(0, Math.max(vw - size, tx));
+  ty = size <= vh ? (vh - size) / 2 : Math.min(0, Math.max(vh - size, ty));
   boardEl.style.transform = zoom === 1 ? '' : `translate(${tx}px, ${ty}px) scale(${zoom})`;
-  viewEl.classList.toggle('zoomed', zoom > 1);
   const btn = $('btn-zoom');
   btn.classList.toggle('on', zoom > 1);
   btn.title = zoom > 1 ? 'Reset zoom' : 'Zoom in (pinch or scroll on the board for more)';
   btn.innerHTML = zoom > 1 ? `${zoom.toFixed(1)}×` : '<svg viewBox="0 0 24 24"><use href="#i-zoom"/></svg>';
 }
 
-// Zoom so that the board point under viewport position (cx, cy) stays put.
-function zoomAt(z, cx, cy) {
-  z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
-  const bx = (cx - tx) / zoom, by = (cy - ty) / zoom;
-  zoom = z;
-  tx = cx - bx * z;
-  ty = cy - by * z;
+// Board fraction under a screen point.
+function fractionAt(sx, sy) {
+  const r = viewEl.getBoundingClientRect(), size = boardSize() * zoom;
+  return { fx: (sx - r.left - tx) / size, fy: (sy - r.top - ty) / size };
+}
+
+// Set the zoom and place board fraction (fx, fy) under screen point (sx, sy).
+function placeView(z, fx, fy, sx, sy) {
+  zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+  screenGame.classList.toggle('zoomed', zoom > 1);
+  boardEl.style.width = zoom > 1 ? `${boardSize()}px` : '';
+  const r = viewEl.getBoundingClientRect(), size = boardSize() * zoom;
+  tx = sx - r.left - fx * size;
+  ty = sy - r.top - fy * size;
   applyView();
+}
+
+function zoomAt(z, sx, sy) {
+  const { fx, fy } = fractionAt(sx, sy);
+  placeView(z, fx, fy, sx, sy);
 }
 
 function resetZoom() {
@@ -144,10 +167,10 @@ function resetZoom() {
 // opponent's moves trigger it); the whole move is then centred.
 function ensureVisible(last) {
   if (zoom === 1 || !last || !last.cells?.length) return;
-  const vw = viewEl.clientWidth, cs = vw / W;
+  const vw = viewEl.clientWidth, vh = viewEl.clientHeight, cs = boardSize() / W;
   const origin = last.type === 'bomb' ? last.center : (last.origin ?? last.cells[0]);
   const ox = tx + (origin % W) * cs * zoom, oy = ty + Math.floor(origin / W) * cs * zoom;
-  if (ox >= 0 && oy >= 0 && ox + cs * zoom <= vw && oy + cs * zoom <= vw) return;
+  if (ox >= 0 && oy >= 0 && ox + cs * zoom <= vw && oy + cs * zoom <= vh) return;
   let minX = W, minY = H, maxX = -1, maxY = -1;
   for (const i of last.cells) {
     const x = i % W, y = Math.floor(i / W);
@@ -157,7 +180,7 @@ function ensureVisible(last) {
   const midX = (minX + maxX + 1) / 2 * cs, midY = (minY + maxY + 1) / 2 * cs;
   boardEl.classList.add('glide');
   tx = vw / 2 - midX * zoom;
-  ty = vw / 2 - midY * zoom;
+  ty = vh / 2 - midY * zoom;
   applyView();
 }
 
@@ -166,46 +189,38 @@ function capture(id) {
 }
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
-const local = e => { const r = viewEl.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
 
 viewEl.addEventListener('pointerdown', e => {
   if (e.button !== 0 && e.pointerType === 'mouse') return;
   suppressClick = false;
   boardEl.classList.remove('glide');
-  pointers.set(e.pointerId, local(e));
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   const pts = [...pointers.values()];
   if (pts.length === 1) {
-    gesture = { kind: 'pan', start: pts[0], tx, ty, moved: false };
+    gesture = { kind: 'pan', start: pts[0], ...fractionAt(pts[0].x, pts[0].y), moved: false };
   } else if (pts.length === 2) {
     for (const id of pointers.keys()) capture(id);
-    gesture = { kind: 'pinch', mid: mid(pts[0], pts[1]), dist: dist(pts[0], pts[1]), zoom, tx, ty, moved: true };
+    const m = mid(pts[0], pts[1]);
+    gesture = { kind: 'pinch', dist: dist(pts[0], pts[1]), zoom, ...fractionAt(m.x, m.y), moved: true };
     viewEl.classList.add('dragging');
   }
 });
 
 viewEl.addEventListener('pointermove', e => {
   if (!gesture || !pointers.has(e.pointerId)) return;
-  pointers.set(e.pointerId, local(e));
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   const pts = [...pointers.values()];
   if (gesture.kind === 'pinch' && pts.length >= 2) {
     const m = mid(pts[0], pts[1]);
-    const z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, gesture.zoom * dist(pts[0], pts[1]) / gesture.dist));
-    const bx = (gesture.mid.x - gesture.tx) / gesture.zoom, by = (gesture.mid.y - gesture.ty) / gesture.zoom;
-    zoom = z;
-    tx = m.x - bx * z;
-    ty = m.y - by * z;
-    applyView();
+    placeView(gesture.zoom * dist(pts[0], pts[1]) / gesture.dist, gesture.fx, gesture.fy, m.x, m.y);
   } else if (gesture.kind === 'pan') {
-    const dx = pts[0].x - gesture.start.x, dy = pts[0].y - gesture.start.y;
     if (!gesture.moved) {
-      if (zoom === 1 || Math.hypot(dx, dy) < 6) return;
+      if (zoom === 1 || dist(pts[0], gesture.start) < 6) return;
       gesture.moved = true;
       capture(e.pointerId);
       viewEl.classList.add('dragging');
     }
-    tx = gesture.tx + dx;
-    ty = gesture.ty + dy;
-    applyView();
+    placeView(zoom, gesture.fx, gesture.fy, pts[0].x, pts[0].y);
   }
 });
 
@@ -215,7 +230,7 @@ function endPointer(e) {
   if (gesture?.moved) suppressClick = true;
   const pts = [...pointers.values()];
   if (pts.length === 1 && gesture) {
-    gesture = { kind: 'pan', start: pts[0], tx, ty, moved: true };
+    gesture = { kind: 'pan', start: pts[0], ...fractionAt(pts[0].x, pts[0].y), moved: true };
   } else if (pts.length === 0) {
     gesture = null;
     viewEl.classList.remove('dragging');
@@ -234,18 +249,31 @@ viewEl.addEventListener('wheel', e => {
   if (z === zoom && zoom === 1) return;
   e.preventDefault();
   boardEl.classList.remove('glide');
-  const { x, y } = local(e);
-  zoomAt(z, x, y);
+  zoomAt(z, e.clientX, e.clientY);
 }, { passive: false });
 
-window.addEventListener('resize', applyView);
+window.addEventListener('resize', () => {
+  if (zoom === 1) return;
+  const r = viewEl.getBoundingClientRect();
+  const { fx, fy } = fractionAt(r.left + r.width / 2, r.top + r.height / 2);
+  boardEl.style.width = `${boardSize()}px`;
+  const n = viewEl.getBoundingClientRect();
+  placeView(zoom, fx, fy, n.left + n.width / 2, n.top + n.height / 2);
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && zoom > 1 && !screenGame.hidden) resetZoom();
+});
 
 $('btn-zoom').onclick = () => {
   sfx.tap();
   if (zoom > 1) { resetZoom(); return; }
   boardEl.classList.add('glide');
-  const vw = viewEl.clientWidth;
-  zoomAt(ZOOM_PRESET, vw / 2, vw / 2);
+  const r = viewEl.getBoundingClientRect();
+  const { fx, fy } = fractionAt(r.left + r.width / 2, r.top + r.height / 2);
+  screenGame.classList.add('zoomed');
+  const n = viewEl.getBoundingClientRect();
+  placeView(ZOOM_PRESET, fx, fy, n.left + n.width / 2, n.top + n.height / 2);
 };
 // Desktop: aiming follows the mouse while the bomb is armed. Touch keeps the
 // two-tap flow (pointerType guard, since taps also emit pointerover).
