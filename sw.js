@@ -1,4 +1,4 @@
-const CACHE = 'mfe-v20';
+const CACHE = 'mfe-v21';
 const ASSETS = [
   './',
   './index.html',

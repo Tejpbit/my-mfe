@@ -14,6 +14,8 @@ only ever sees ciphertext.
 - **vs AI** — single player against a probability-based AI.
 - **Two players, this device** — pass-and-play.
 - **Online** — both players enter the same passphrase; one taps *Create*, the other *Join*.
+- **Zoom** — pinch or scroll on the board (or tap the magnifier), drag to pan. A move
+  that lands outside the zoomed view slides it into the centre.
 
 ## Run locally
 

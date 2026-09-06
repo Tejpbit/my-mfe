@@ -54,6 +54,10 @@
   <symbol id="i-back" viewBox="0 0 24 24">
     <path d="M14.5 5 L 7.5 12 L 14.5 19" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
   </symbol>
+  <symbol id="i-zoom" viewBox="0 0 24 24">
+    <circle cx="10.5" cy="10.5" r="6.5" stroke="currentColor" stroke-width="2.2" fill="none"/>
+    <path d="M15.5 15.5 L 20.5 20.5 M 7.5 10.5 H 13.5 M 10.5 7.5 V 13.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+  </symbol>
 </svg>
 
 <main id="app">
@@ -118,7 +122,9 @@
     <div id="turn-banner" class="turn-banner">Your turn</div>
 
     <div class="board-wrap">
-      <div id="board" class="board"></div>
+      <div id="board-view" class="board-view">
+        <div id="board" class="board"></div>
+      </div>
     </div>
 
     <div id="review-nav" class="review-nav" hidden>
@@ -147,6 +153,7 @@
         <button class="btn coach-btn" id="btn-hint" hidden>Hint</button>
         <button class="btn coach-btn" id="btn-odds" hidden>Odds</button>
         <button class="btn coach-btn" id="btn-why" hidden>Why?</button>
+        <button class="btn zoom-btn" id="btn-zoom" title="Zoom in (pinch or scroll on the board for more)"><svg viewBox="0 0 24 24"><use href="#i-zoom"/></svg></button>
       </div>
       <div id="bomb-hint" class="bomb-hint" hidden>Aim on the board &middot; tap the aimed cell to detonate <button class="link" id="btn-bomb-cancel">cancel</button></div>
     </footer>

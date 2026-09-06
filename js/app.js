@@ -95,9 +95,158 @@ for (let i = 0; i < SIZE; i++) {
   cells.push(b);
 }
 boardEl.addEventListener('click', e => {
+  if (suppressClick) { suppressClick = false; return; }
   const el = e.target.closest('.cell');
   if (el) onCellTap(+el.dataset.i);
 });
+
+/* ---------- zoom & pan ---------- */
+// The board keeps its layout size and is scaled/translated inside the
+// viewport (.board-view); tx/ty are in viewport pixels, origin top-left.
+const viewEl = $('board-view');
+const ZOOM_MIN = 1, ZOOM_MAX = 4, ZOOM_PRESET = 2;
+let zoom = 1, tx = 0, ty = 0;
+let suppressClick = false;
+const pointers = new Map();
+let gesture = null;
+
+function applyView() {
+  const vw = viewEl.clientWidth;
+  if (zoom <= 1.02) { zoom = 1; tx = 0; ty = 0; }
+  tx = Math.min(0, Math.max(vw - vw * zoom, tx));
+  ty = Math.min(0, Math.max(vw - vw * zoom, ty));
+  boardEl.style.transform = zoom === 1 ? '' : `translate(${tx}px, ${ty}px) scale(${zoom})`;
+  viewEl.classList.toggle('zoomed', zoom > 1);
+  const btn = $('btn-zoom');
+  btn.classList.toggle('on', zoom > 1);
+  btn.title = zoom > 1 ? 'Reset zoom' : 'Zoom in (pinch or scroll on the board for more)';
+  btn.innerHTML = zoom > 1 ? `${zoom.toFixed(1)}×` : '<svg viewBox="0 0 24 24"><use href="#i-zoom"/></svg>';
+}
+
+// Zoom so that the board point under viewport position (cx, cy) stays put.
+function zoomAt(z, cx, cy) {
+  z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+  const bx = (cx - tx) / zoom, by = (cy - ty) / zoom;
+  zoom = z;
+  tx = cx - bx * z;
+  ty = cy - by * z;
+  applyView();
+}
+
+function resetZoom() {
+  boardEl.classList.add('glide');
+  zoom = 1; tx = 0; ty = 0;
+  applyView();
+}
+
+// Bring a move into view when it lands outside the zoomed viewport: the
+// origin cell decides (own taps are always visible, so only floods or the
+// opponent's moves trigger it); the whole move is then centred.
+function ensureVisible(last) {
+  if (zoom === 1 || !last || !last.cells?.length) return;
+  const vw = viewEl.clientWidth, cs = vw / W;
+  const origin = last.type === 'bomb' ? last.center : (last.origin ?? last.cells[0]);
+  const ox = tx + (origin % W) * cs * zoom, oy = ty + Math.floor(origin / W) * cs * zoom;
+  if (ox >= 0 && oy >= 0 && ox + cs * zoom <= vw && oy + cs * zoom <= vw) return;
+  let minX = W, minY = H, maxX = -1, maxY = -1;
+  for (const i of last.cells) {
+    const x = i % W, y = Math.floor(i / W);
+    minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+  }
+  const midX = (minX + maxX + 1) / 2 * cs, midY = (minY + maxY + 1) / 2 * cs;
+  boardEl.classList.add('glide');
+  tx = vw / 2 - midX * zoom;
+  ty = vw / 2 - midY * zoom;
+  applyView();
+}
+
+function capture(id) {
+  try { viewEl.setPointerCapture(id); } catch { }
+}
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+const local = e => { const r = viewEl.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+
+viewEl.addEventListener('pointerdown', e => {
+  if (e.button !== 0 && e.pointerType === 'mouse') return;
+  suppressClick = false;
+  boardEl.classList.remove('glide');
+  pointers.set(e.pointerId, local(e));
+  const pts = [...pointers.values()];
+  if (pts.length === 1) {
+    gesture = { kind: 'pan', start: pts[0], tx, ty, moved: false };
+  } else if (pts.length === 2) {
+    for (const id of pointers.keys()) capture(id);
+    gesture = { kind: 'pinch', mid: mid(pts[0], pts[1]), dist: dist(pts[0], pts[1]), zoom, tx, ty, moved: true };
+    viewEl.classList.add('dragging');
+  }
+});
+
+viewEl.addEventListener('pointermove', e => {
+  if (!gesture || !pointers.has(e.pointerId)) return;
+  pointers.set(e.pointerId, local(e));
+  const pts = [...pointers.values()];
+  if (gesture.kind === 'pinch' && pts.length >= 2) {
+    const m = mid(pts[0], pts[1]);
+    const z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, gesture.zoom * dist(pts[0], pts[1]) / gesture.dist));
+    const bx = (gesture.mid.x - gesture.tx) / gesture.zoom, by = (gesture.mid.y - gesture.ty) / gesture.zoom;
+    zoom = z;
+    tx = m.x - bx * z;
+    ty = m.y - by * z;
+    applyView();
+  } else if (gesture.kind === 'pan') {
+    const dx = pts[0].x - gesture.start.x, dy = pts[0].y - gesture.start.y;
+    if (!gesture.moved) {
+      if (zoom === 1 || Math.hypot(dx, dy) < 6) return;
+      gesture.moved = true;
+      capture(e.pointerId);
+      viewEl.classList.add('dragging');
+    }
+    tx = gesture.tx + dx;
+    ty = gesture.ty + dy;
+    applyView();
+  }
+});
+
+function endPointer(e) {
+  if (!pointers.has(e.pointerId)) return;
+  pointers.delete(e.pointerId);
+  if (gesture?.moved) suppressClick = true;
+  const pts = [...pointers.values()];
+  if (pts.length === 1 && gesture) {
+    gesture = { kind: 'pan', start: pts[0], tx, ty, moved: true };
+  } else if (pts.length === 0) {
+    gesture = null;
+    viewEl.classList.remove('dragging');
+  }
+}
+viewEl.addEventListener('pointerup', endPointer);
+viewEl.addEventListener('pointercancel', endPointer);
+
+viewEl.addEventListener('wheel', e => {
+  let d = e.deltaY;
+  if (e.deltaMode === 1) d *= 16;
+  else if (e.deltaMode === 2) d *= window.innerHeight;
+  d = Math.max(-100, Math.min(100, d));
+  const k = e.ctrlKey ? 0.01 : 0.002;
+  const z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, zoom * Math.exp(-d * k)));
+  if (z === zoom && zoom === 1) return;
+  e.preventDefault();
+  boardEl.classList.remove('glide');
+  const { x, y } = local(e);
+  zoomAt(z, x, y);
+}, { passive: false });
+
+window.addEventListener('resize', applyView);
+
+$('btn-zoom').onclick = () => {
+  sfx.tap();
+  if (zoom > 1) { resetZoom(); return; }
+  boardEl.classList.add('glide');
+  const vw = viewEl.clientWidth;
+  zoomAt(ZOOM_PRESET, vw / 2, vw / 2);
+};
 // Desktop: aiming follows the mouse while the bomb is armed. Touch keeps the
 // two-tap flow (pointerType guard, since taps also emit pointerover).
 boardEl.addEventListener('pointerover', e => {
@@ -264,6 +413,7 @@ function doMove(move, p) {
 
 function playFx(last, mover) {
   const meMoved = mode === 'hot' || mover === myPlayer;
+  ensureVisible(last);
   if (last.type === 'bomb') sfx.bomb();
   else if (last.type === 'mine') sfx.mine(meMoved);
   else sfx.safe(last.cells.length);
@@ -489,6 +639,7 @@ function stepTo(k) {
   state = s;
   oddsCache = { seq: -1, prob: null };
   clearMarks();
+  ensureVisible(res);
   $('review-label').textContent = `${k}/${review.moves.length}`;
   const slider = $('rv-slider');
   slider.max = review.moves.length;
@@ -791,6 +942,8 @@ function esc(s) { return String(s).replace(/[<>&"]/g, c => ({ '<': '&lt;', '>': 
 /* ---------- start games ---------- */
 function resetFlags() {
   armed = false; aiming = -1; saved = false;
+  zoom = 1; tx = 0; ty = 0;
+  applyView();
   clearMarks();
   oddsCache = { seq: -1, prob: null };
   whyMode = false;
