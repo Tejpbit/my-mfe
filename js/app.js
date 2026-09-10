@@ -347,6 +347,10 @@ function render() {
     } else {
       delete el.dataset.n;
       if (aimSet.has(i)) el.classList.add('aim');
+      if (s.status === 'over' && s.mines[i]) {
+        el.classList.add('mine-left');
+        el.innerHTML = '<svg viewBox="0 0 24 24"><use href="#i-mine"/></svg>';
+      }
     }
     if (corners[i]) el.classList.add(corners[i]);
     if (coach) {
@@ -365,7 +369,7 @@ function render() {
   if (coach && oddsOn && (mode === 'review' || (s.status === 'playing' && s.turn === myPlayer))) {
     if (oddsCache.seq !== s.seq) oddsCache = { seq: s.seq, prob: exactProbs(s).prob };
     for (let i = 0; i < SIZE; i++) {
-      if (!s.revealed[i]) {
+      if (!s.revealed[i] && !cells[i].classList.contains('mine-left')) {
         cells[i].classList.add('oddsview');
         cells[i].textContent = Math.round(oddsCache.prob[i] * 100);
       }

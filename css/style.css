@@ -253,6 +253,8 @@ body.in-game.zoomed { touch-action: none; }
 .cell svg { width: 72%; height: 72%; pointer-events: none; }
 .cell.flag-0 { background: color-mix(in srgb, var(--red) 22%, var(--bg2)); color: var(--red); }
 .cell.flag-1 { background: color-mix(in srgb, var(--blue) 22%, var(--bg2)); color: var(--blue); }
+.cell.mine-left { background: color-mix(in srgb, var(--muted) 14%, var(--bg2)); color: var(--muted); cursor: default; animation: pop 0.22s ease; }
+.cell.mine-left svg { width: 60%; height: 60%; opacity: 0.75; }
 .cell.lastr::after {
   content: ""; position: absolute; inset: -2px; pointer-events: none;
   border: 0 solid color-mix(in srgb, var(--gold) 78%, var(--bg));
