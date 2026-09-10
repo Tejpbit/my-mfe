@@ -24,6 +24,7 @@ html, body {
   margin: 0;
   height: 100%;
 }
+html { overflow-x: clip; }
 
 body {
   background: radial-gradient(1200px 600px at 50% -10%, #182031, var(--bg) 60%);
@@ -171,6 +172,8 @@ input[type="text"]:focus, select:focus { border-color: var(--blue); }
 
 /* ---------- game ---------- */
 #screen-game { gap: 10px; }
+body.in-game { touch-action: pan-y; }
+body.in-game.zoomed { touch-action: none; }
 .game-header { display: flex; align-items: center; gap: 8px; }
 .player {
   flex: 1; display: flex; align-items: center; gap: 8px;
@@ -207,13 +210,14 @@ input[type="text"]:focus, select:focus { border-color: var(--blue); }
 .board-wrap { display: flex; justify-content: center; }
 .board-view {
   position: relative;
-  overflow: hidden;
+  z-index: 1;
   width: min(100%, calc(100dvh - 250px), 560px);
   aspect-ratio: 1;
-  touch-action: pan-y;
   -webkit-touch-callout: none;
 }
 .board-view.dragging .cell { cursor: grabbing; }
+/* Everything but the board paints above it, so a zoomed board spreads underneath. */
+#screen-game > *:not(.board-wrap):not(.overlay) { position: relative; z-index: 2; }
 #screen-game.coach-on .board-view { width: min(100%, calc(100dvh - 330px), 560px); }
 .board {
   display: grid;
@@ -223,6 +227,7 @@ input[type="text"]:focus, select:focus { border-color: var(--blue); }
   width: 100%;
   aspect-ratio: 1;
   transform-origin: 0 0;
+  will-change: transform;
 }
 .board.glide { transition: transform 0.35s ease; }
 .cell {
@@ -459,20 +464,15 @@ input[type="text"]:focus, select:focus { border-color: var(--blue); }
   60% { transform: translateX(-4px); } 80% { transform: translateX(4px); }
 }
 
-/* ---------- zoomed: the game screen becomes a full-viewport layer ---------- */
-#screen-game.zoomed {
-  position: fixed; inset: 0; z-index: 40;
-  display: flex; flex-direction: column; gap: 6px;
-  padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
-  background: var(--bg);
-  animation: none;
+
+/* ---------- edge hints: where the zoomed board continues past the screen ---------- */
+#edge-hints { position: fixed; inset: 0; z-index: 1; pointer-events: none; }
+#edge-hints i {
+  position: absolute; opacity: 0; transition: opacity 0.15s;
+  --glow: rgba(255, 176, 46, 0.35);
 }
-#screen-game.zoomed > *:not(.overlay) { width: 100%; max-width: 1040px; margin: 0 auto; }
-#screen-game.zoomed #coach,
-#screen-game.zoomed .scorebar,
-#screen-game.zoomed .rv-chart,
-#screen-game.zoomed .rv-legend { display: none; }
-#screen-game.zoomed .turn-banner { min-height: 0; }
-#screen-game.zoomed .board-wrap { flex: 1; min-height: 0; max-width: none; display: flex; align-items: stretch; }
-#screen-game.zoomed .board-view { flex: 1; width: auto; height: auto; min-height: 0; aspect-ratio: auto; touch-action: none; }
-#screen-game.zoomed .game-footer { margin-top: 0; min-height: 0; }
+#edge-hints .eh-t { top: 0; left: 0; right: 0; height: 22px; background: linear-gradient(to bottom, var(--glow), transparent); }
+#edge-hints .eh-b { bottom: 0; left: 0; right: 0; height: 22px; background: linear-gradient(to top, var(--glow), transparent); }
+#edge-hints .eh-l { top: 0; bottom: 0; left: 0; width: 22px; background: linear-gradient(to right, var(--glow), transparent); }
+#edge-hints .eh-r { top: 0; bottom: 0; right: 0; width: 22px; background: linear-gradient(to left, var(--glow), transparent); }
+#edge-hints.more-t .eh-t, #edge-hints.more-b .eh-b, #edge-hints.more-l .eh-l, #edge-hints.more-r .eh-r { opacity: 1; }

@@ -41,6 +41,8 @@ let saved = false;        // result recorded for current game
 const screens = ['home', 'game', 'tutorial', 'settings', 'history'];
 function show(name) {
   for (const s of screens) $(`screen-${s}`).hidden = s !== name;
+  document.body.classList.toggle('in-game', name === 'game');
+  if (name !== 'game' && zoom > 1) resetZoom();
   if (name === 'history') renderHistory();
   if (name === 'home') updateContinue();
   window.scrollTo(0, 0);
@@ -95,39 +97,43 @@ for (let i = 0; i < SIZE; i++) {
   cells.push(b);
 }
 boardEl.addEventListener('click', e => {
-  if (suppressClick) { suppressClick = false; return; }
   const el = e.target.closest('.cell');
   if (el) onCellTap(+el.dataset.i);
 });
 
 /* ---------- zoom & pan ---------- */
-// Zoomed in, the game screen turns into a fixed full-viewport layer and the
-// board fills everything between header and footer. The board keeps a square
-// layout size and is scaled/translated inside the viewport (.board-view);
-// tx/ty are viewport pixels. Positions during gestures are tracked as board
-// fractions (0..1) so a layout jump mid-gesture keeps the point under the
-// fingers where it is.
+// The board is scaled/translated in place (transform only, never a layout
+// change) and paints over the rest of the game screen, which sits above it
+// in stacking order. tx/ty are pixels relative to the board's slot
+// (.board-view); clamping is done against the window so the zoomed board
+// covers the screen. Gesture positions are tracked as board fractions
+// (0..1) so a mid-gesture reflow keeps the point under the fingers put.
 const viewEl = $('board-view');
 const screenGame = $('screen-game');
-const ZOOM_MIN = 1, ZOOM_MAX = 4, ZOOM_PRESET = 2;
+const edgeHints = $('edge-hints');
+const ZOOM_MIN = 1, ZOOM_MAX = 4, ZOOM_PRESET = 2, ZOOM_SNAP = 1.02;
 let zoom = 1, tx = 0, ty = 0;
 let suppressClick = false;
 const pointers = new Map();
 let gesture = null;
 
-function boardSize() {
-  return zoom > 1 ? Math.min(viewEl.clientWidth, viewEl.clientHeight) : viewEl.clientWidth;
-}
-
 function applyView() {
-  if (zoom <= 1.02) { zoom = 1; tx = 0; ty = 0; }
-  screenGame.classList.toggle('zoomed', zoom > 1);
-  const vw = viewEl.clientWidth, vh = viewEl.clientHeight;
-  const B = boardSize(), size = B * zoom;
-  boardEl.style.width = zoom > 1 ? `${B}px` : '';
-  tx = size <= vw ? (vw - size) / 2 : Math.min(0, Math.max(vw - size, tx));
-  ty = size <= vh ? (vh - size) / 2 : Math.min(0, Math.max(vh - size, ty));
+  const r = viewEl.getBoundingClientRect(), size = r.width * zoom;
+  const vw = document.documentElement.clientWidth, vh = document.documentElement.clientHeight;
+  if (zoom === 1) { tx = 0; ty = 0; } else {
+    // The board always covers its slot, so the field area is never empty and
+    // the position converges to the slot as the zoom returns to 1.
+    tx = Math.min(0, Math.max(r.width - size, tx));
+    ty = Math.min(0, Math.max(r.height - size, ty));
+  }
   boardEl.style.transform = zoom === 1 ? '' : `translate(${tx}px, ${ty}px) scale(${zoom})`;
+  document.body.classList.toggle('zoomed', zoom > 1);
+  const L = r.left + tx, T = r.top + ty;
+  edgeHints.hidden = zoom === 1;
+  edgeHints.classList.toggle('more-l', L < -1);
+  edgeHints.classList.toggle('more-r', L + size > vw + 1);
+  edgeHints.classList.toggle('more-t', T < -1);
+  edgeHints.classList.toggle('more-b', T + size > vh + 1);
   const btn = $('btn-zoom');
   btn.classList.toggle('on', zoom > 1);
   btn.title = zoom > 1 ? 'Reset zoom' : 'Zoom in (pinch or scroll on the board for more)';
@@ -136,16 +142,14 @@ function applyView() {
 
 // Board fraction under a screen point.
 function fractionAt(sx, sy) {
-  const r = viewEl.getBoundingClientRect(), size = boardSize() * zoom;
+  const r = viewEl.getBoundingClientRect(), size = r.width * zoom;
   return { fx: (sx - r.left - tx) / size, fy: (sy - r.top - ty) / size };
 }
 
 // Set the zoom and place board fraction (fx, fy) under screen point (sx, sy).
 function placeView(z, fx, fy, sx, sy) {
   zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
-  screenGame.classList.toggle('zoomed', zoom > 1);
-  boardEl.style.width = zoom > 1 ? `${boardSize()}px` : '';
-  const r = viewEl.getBoundingClientRect(), size = boardSize() * zoom;
+  const r = viewEl.getBoundingClientRect(), size = r.width * zoom;
   tx = sx - r.left - fx * size;
   ty = sy - r.top - fy * size;
   applyView();
@@ -158,45 +162,49 @@ function zoomAt(z, sx, sy) {
 
 function resetZoom() {
   boardEl.classList.add('glide');
-  zoom = 1; tx = 0; ty = 0;
+  zoom = 1;
   applyView();
 }
 
-// Bring a move into view when it lands outside the zoomed viewport: the
+// Bring a move into view when it lands outside the zoomed screen: the
 // origin cell decides (own taps are always visible, so only floods or the
 // opponent's moves trigger it); the whole move is then centred.
 function ensureVisible(last) {
   if (zoom === 1 || !last || !last.cells?.length) return;
-  const vw = viewEl.clientWidth, vh = viewEl.clientHeight, cs = boardSize() / W;
+  const r = viewEl.getBoundingClientRect(), cs = r.width / W * zoom;
+  const vw = document.documentElement.clientWidth, vh = document.documentElement.clientHeight;
   const origin = last.type === 'bomb' ? last.center : (last.origin ?? last.cells[0]);
-  const ox = tx + (origin % W) * cs * zoom, oy = ty + Math.floor(origin / W) * cs * zoom;
-  if (ox >= 0 && oy >= 0 && ox + cs * zoom <= vw && oy + cs * zoom <= vh) return;
+  const ox = r.left + tx + (origin % W) * cs, oy = r.top + ty + Math.floor(origin / W) * cs;
+  if (ox >= 0 && oy >= 0 && ox + cs <= vw && oy + cs <= vh) return;
   let minX = W, minY = H, maxX = -1, maxY = -1;
   for (const i of last.cells) {
     const x = i % W, y = Math.floor(i / W);
     minX = Math.min(minX, x); maxX = Math.max(maxX, x);
     minY = Math.min(minY, y); maxY = Math.max(maxY, y);
   }
-  const midX = (minX + maxX + 1) / 2 * cs, midY = (minY + maxY + 1) / 2 * cs;
   boardEl.classList.add('glide');
-  tx = vw / 2 - midX * zoom;
-  ty = vh / 2 - midY * zoom;
+  tx = vw / 2 - r.left - (minX + maxX + 1) / 2 * cs;
+  ty = vh / 2 - r.top - (minY + maxY + 1) / 2 * cs;
   applyView();
 }
 
 function capture(id) {
-  try { viewEl.setPointerCapture(id); } catch { }
+  try { document.documentElement.setPointerCapture(id); } catch { }
 }
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
 
-viewEl.addEventListener('pointerdown', e => {
-  if (e.button !== 0 && e.pointerType === 'mouse') return;
+// Gestures are taken on the whole page while the game screen is up: a pinch
+// anywhere zooms the grid (never the page), a one-finger drag pans only when
+// it starts on the grid, so sliders and buttons keep working.
+document.addEventListener('pointerdown', e => {
+  if (screenGame.hidden || (e.button !== 0 && e.pointerType === 'mouse')) return;
   suppressClick = false;
   boardEl.classList.remove('glide');
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   const pts = [...pointers.values()];
   if (pts.length === 1) {
+    if (!e.target.closest('#board-view')) { gesture = null; return; }
     gesture = { kind: 'pan', start: pts[0], ...fractionAt(pts[0].x, pts[0].y), moved: false };
   } else if (pts.length === 2) {
     for (const id of pointers.keys()) capture(id);
@@ -206,9 +214,10 @@ viewEl.addEventListener('pointerdown', e => {
   }
 });
 
-viewEl.addEventListener('pointermove', e => {
-  if (!gesture || !pointers.has(e.pointerId)) return;
+document.addEventListener('pointermove', e => {
+  if (!pointers.has(e.pointerId)) return;
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (!gesture) return;
   const pts = [...pointers.values()];
   if (gesture.kind === 'pinch' && pts.length >= 2) {
     const m = mid(pts[0], pts[1]);
@@ -234,32 +243,40 @@ function endPointer(e) {
   } else if (pts.length === 0) {
     gesture = null;
     viewEl.classList.remove('dragging');
+    if (zoom > 1 && zoom <= ZOOM_SNAP) resetZoom();
   }
 }
-viewEl.addEventListener('pointerup', endPointer);
-viewEl.addEventListener('pointercancel', endPointer);
+document.addEventListener('pointerup', endPointer);
+document.addEventListener('pointercancel', endPointer);
 
-viewEl.addEventListener('wheel', e => {
+// A drag or pinch must not end in a click on whatever is under the pointer.
+document.addEventListener('click', e => {
+  if (!suppressClick) return;
+  suppressClick = false;
+  e.stopPropagation();
+  e.preventDefault();
+}, true);
+
+// Wheel zooms the grid when over it, whenever zoomed in, and for trackpad
+// pinches (ctrlKey) anywhere on the page; plain wheel elsewhere scrolls.
+document.addEventListener('wheel', e => {
+  if (screenGame.hidden) return;
+  if (!e.ctrlKey && zoom === 1 && !e.target.closest('#board-view')) return;
   let d = e.deltaY;
   if (e.deltaMode === 1) d *= 16;
   else if (e.deltaMode === 2) d *= window.innerHeight;
   d = Math.max(-100, Math.min(100, d));
   const k = e.ctrlKey ? 0.01 : 0.002;
   const z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, zoom * Math.exp(-d * k)));
-  if (z === zoom && zoom === 1) return;
   e.preventDefault();
+  if (z === zoom) return;
+  if (z <= ZOOM_SNAP) { resetZoom(); return; }
   boardEl.classList.remove('glide');
   zoomAt(z, e.clientX, e.clientY);
 }, { passive: false });
 
-window.addEventListener('resize', () => {
-  if (zoom === 1) return;
-  const r = viewEl.getBoundingClientRect();
-  const { fx, fy } = fractionAt(r.left + r.width / 2, r.top + r.height / 2);
-  boardEl.style.width = `${boardSize()}px`;
-  const n = viewEl.getBoundingClientRect();
-  placeView(zoom, fx, fy, n.left + n.width / 2, n.top + n.height / 2);
-});
+window.addEventListener('resize', () => { if (zoom > 1) applyView(); });
+window.addEventListener('scroll', () => { if (zoom > 1) applyView(); }, { passive: true });
 
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && zoom > 1 && !screenGame.hidden) resetZoom();
@@ -270,10 +287,7 @@ $('btn-zoom').onclick = () => {
   if (zoom > 1) { resetZoom(); return; }
   boardEl.classList.add('glide');
   const r = viewEl.getBoundingClientRect();
-  const { fx, fy } = fractionAt(r.left + r.width / 2, r.top + r.height / 2);
-  screenGame.classList.add('zoomed');
-  const n = viewEl.getBoundingClientRect();
-  placeView(ZOOM_PRESET, fx, fy, n.left + n.width / 2, n.top + n.height / 2);
+  zoomAt(ZOOM_PRESET, r.left + r.width / 2, r.top + r.height / 2);
 };
 // Desktop: aiming follows the mouse while the bomb is armed. Touch keeps the
 // two-tap flow (pointerType guard, since taps also emit pointerover).
@@ -970,7 +984,7 @@ function esc(s) { return String(s).replace(/[<>&"]/g, c => ({ '<': '&lt;', '>': 
 /* ---------- start games ---------- */
 function resetFlags() {
   armed = false; aiming = -1; saved = false;
-  zoom = 1; tx = 0; ty = 0;
+  zoom = 1;
   applyView();
   clearMarks();
   oddsCache = { seq: -1, prob: null };
